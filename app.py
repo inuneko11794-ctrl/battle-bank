@@ -26,8 +26,8 @@ def save_history(new_data):
 
 def extract_data_from_image(image):
     """Geminiを使って画像から出走表データを抽出"""
-    # ★あなたの環境で確実に動く最新モデルを指定！
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    # ★エラーの指示通り、最新の 3.8-flash に変更しました！
+    model = genai.GenerativeModel('gemini-flash-latest')
     
     prompt = """
     この競輪の出走表画像から、選手のデータを抽出してJSON形式で出力してください。
