@@ -26,20 +26,6 @@ def save_history(new_data):
 
 def extract_data_from_image(image):
     """Geminiを使って画像から出走表データを抽出"""
-    # ★あなたのAPIキーで使えるモデルを自動で探し出す機能
-    target_model = 'gemini-1.5-flash-latest' # 確実な最新モデルを仮置き
-    try:
-        available_models = [m.name for m in genai.list_models()]
-        if 'models/gemini-1.5-flash' in available_models:
-            target_model = 'models/gemini-1.5-flash'
-        elif 'models/gemini-1.5-pro' in available_models:
-            target_model = 'models/gemini-1.5-pro'
-        elif 'models/gemini-pro-vision' in available_models:
-            target_model = 'models/gemini-pro-vision'
-    except:
-        pass
-
-    model = genai.GenerativeModel(target_model)
     prompt = """
     この競輪の出走表画像から、選手のデータを抽出してJSON形式で出力してください。
     以下のフォーマットの配列（リスト）のみを出力し、他のテキストは含めないでください。
@@ -60,9 +46,29 @@ def extract_data_from_image(image):
     ]
     基本印がない場合は "" にしてください。ライン役割は「先頭」「番手」「3番手」「単騎」から推測してください。
     """
-    response = model.generate_content([prompt, image])
-    json_text = response.text.replace('```json', '').replace('```', '').strip()
-    return json.loads(json_text)
+    
+    # ★絶対に諦めない！使えるAIモデルを片っ端から試す最強ループ
+    models_to_try = [
+        'gemini-1.5-flash',
+        'gemini-1.5-pro',
+        'gemini-pro-vision',
+        'models/gemini-1.5-flash',
+        'models/gemini-1.5-pro'
+    ]
+    
+    last_error = None
+    for model_name in models_to_try:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content([prompt, image])
+            json_text = response.text.replace('```json', '').replace('```', '').strip()
+            return json.loads(json_text)
+        except Exception as e:
+            last_error = e
+            continue # エラーが起きたら次のモデルを試す！
+            
+    # 全て失敗した場合のみエラーを出す
+    raise Exception(f"AIモデルへの接続に失敗しました。詳細: {last_error}")
 
 def calculate_brain_score(player):
     score = player.get("競走得点", 0.0)
