@@ -26,7 +26,20 @@ def save_history(new_data):
 
 def extract_data_from_image(image):
     """Geminiを使って画像から出走表データを抽出"""
-    model = genai.GenerativeModel('gemini-1.5-pro')
+    # ★あなたのAPIキーで使えるモデルを自動で探し出す機能
+    target_model = 'gemini-1.5-flash-latest' # 確実な最新モデルを仮置き
+    try:
+        available_models = [m.name for m in genai.list_models()]
+        if 'models/gemini-1.5-flash' in available_models:
+            target_model = 'models/gemini-1.5-flash'
+        elif 'models/gemini-1.5-pro' in available_models:
+            target_model = 'models/gemini-1.5-pro'
+        elif 'models/gemini-pro-vision' in available_models:
+            target_model = 'models/gemini-pro-vision'
+    except:
+        pass
+
+    model = genai.GenerativeModel(target_model)
     prompt = """
     この競輪の出走表画像から、選手のデータを抽出してJSON形式で出力してください。
     以下のフォーマットの配列（リスト）のみを出力し、他のテキストは含めないでください。
@@ -75,18 +88,11 @@ def generate_bets(players, max_2t_points, max_3t_points):
     p4 = sorted_players[3]["車番"] if len(sorted_players) > 3 else p3
     p5 = sorted_players[4]["車番"] if len(sorted_players) > 4 else p4
     
-    # 2連単の買い目候補
     nitantan_candidates = [
-        f"{p1} - {p2}",
-        f"{p1} - {p3}",
-        f"{p2} - {p1}",
-        f"{p1} - {p4}",
-        f"{p2} - {p3}",
-        f"{p3} - {p1}",
-        f"{p1} - {p5}"
+        f"{p1} - {p2}", f"{p1} - {p3}", f"{p2} - {p1}",
+        f"{p1} - {p4}", f"{p2} - {p3}", f"{p3} - {p1}", f"{p1} - {p5}"
     ]
     
-    # 3連単の買い目候補
     santantan_candidates = [
         f"{p1} - {p2} - {p3}", f"{p1} - {p2} - {p4}", f"{p1} - {p3} - {p2}",
         f"{p1} - {p3} - {p4}", f"{p2} - {p1} - {p3}", f"{p2} - {p1} - {p4}",
@@ -97,7 +103,7 @@ def generate_bets(players, max_2t_points, max_3t_points):
     return {
         "単勝": [f"{p1}"],
         "2連単": nitantan_candidates[:max_2t_points],
-        "3连単": santantan_candidates[:max_3t_points]
+        "3連単": santantan_candidates[:max_3t_points]
     }
 
 # --- UI画面 ---
@@ -131,16 +137,13 @@ if uploaded_file is not None:
             st.markdown("### 🎯 バトルバンク君の買い目")
             
             st.markdown("#### 🥇 【単勝】")
-            for b in bets["単勝"]:
-                st.code(b)
+            for b in bets["単勝"]: st.code(b)
                 
             st.markdown(f"#### 🥈 【2連単 ({len(bets['2連単'])}点)】")
-            for b in bets["2連単"]:
-                st.code(b)
+            for b in bets["2連単"]: st.code(b)
                 
             st.markdown(f"#### 🥉 【3連単 ({len(bets['3連単'])}点)】")
-            for b in bets["3連単"]:
-                st.code(b)
+            for b in bets["3連単"]: st.code(b)
                 
             with st.expander("🔍 読み取った詳細データを見る"):
                 st.json(extracted_data)
@@ -155,3 +158,4 @@ if uploaded_file is not None:
                     
         except Exception as e:
             st.error(f"エラーが発生しました: {e}")
+            st.info("※1〜2分待ってからページを再読み込み（リロード）して、もう一度画像をアップロードしてみてください。")
