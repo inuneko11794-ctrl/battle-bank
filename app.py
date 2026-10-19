@@ -67,47 +67,78 @@ def extract_data_from_image(image):
     return json.loads(json_text)
 
 def apply_custom_marks(data):
-    """マスター直伝！ライン相乗効果（新ルール）を適用"""
+    """マスター直伝！左から優先・1個限定ルールを適用"""
     players = data.get("選手", [])
     lines = data.get("並び予想", [])
     
     player_dict = {p["車番"]: p for p in players}
+    # 判定前の「本来の印」を記憶しておく
+    original_marks = {p["車番"]: p.get("基本印", "") for p in players}
+    
+    # すでに使われた特殊印（⑳●▲✖）を記録する箱
+    used_special_marks = set()
     
     for line in lines:
         if len(line) == 1:
+            # 単騎の場合
             current_car = line[0]
             if current_car in player_dict:
                 curr_p = player_dict[current_car]
-                if curr_p.get("基本印", "") == "":
+                if original_marks[current_car] == "":
                     curr_p["基本印"] = "T" 
         else:
-            for i in range(1, len(line)):
+            # ★左（前）から順番に処理していく！
+            for i in range(len(line)):
                 current_car = line[i]
-                prev_car = line[i-1]
-                
-                if current_car in player_dict and prev_car in player_dict:
-                    curr_p = player_dict[current_car]
-                    prev_p = player_dict[prev_car]
+                if current_car not in player_dict:
+                    continue
                     
-                    if curr_p.get("基本印", "") == "":
-                        prev_mark = prev_p.get("基本印", "")
-                        if prev_mark == "◎":
-                            curr_p["基本印"] = "⑳"
-                        elif prev_mark == "◯":
-                            curr_p["基本印"] = "●"
-                        elif prev_mark == "△":
-                            curr_p["基本印"] = "▲"
-                        elif prev_mark in ["✕", "×"]:
-                            curr_p["基本印"] = "✖"
-                        else:
-                            curr_p["基本印"] = "☆★"
+                curr_p = player_dict[current_car]
+                
+                # 元が無印だった場合のみ変身チャンス
+                if original_marks[current_car] == "":
+                    # 隣（前と後ろ）の選手の【元の印】を確認
+                    neighbor_marks = []
+                    if i > 0:
+                        prev_car = line[i-1]
+                        if prev_car in original_marks:
+                            neighbor_marks.append(original_marks[prev_car])
+                    if i < len(line) - 1:
+                        next_car = line[i+1]
+                        if next_car in original_marks:
+                            neighbor_marks.append(original_marks[next_car])
+                            
+                    # 優先順位（◎ > ◯ > △ > ✕）＆ 1個限定ルール
+                    if "◎" in neighbor_marks and "⑳" not in used_special_marks:
+                        curr_p["基本印"] = "⑳"
+                        used_special_marks.add("⑳")
+                    elif "◯" in neighbor_marks and "●" not in used_special_marks:
+                        curr_p["基本印"] = "●"
+                        used_special_marks.add("●")
+                    elif "△" in neighbor_marks and "▲" not in used_special_marks:
+                        curr_p["基本印"] = "▲"
+                        used_special_marks.add("▲")
+                    elif ("✕" in neighbor_marks or "×" in neighbor_marks) and "✖" not in used_special_marks:
+                        curr_p["基本印"] = "✖"
+                        used_special_marks.add("✖")
+                    else:
+                        # 恩恵を受けられない、または既に枠が埋まっていた場合は「☆」
+                        curr_p["基本印"] = "☆"
+                        
+    # 念のため、ライン予想から漏れた無印選手がいた場合はすべて「☆」にする
+    for curr_p in player_dict.values():
+        if curr_p.get("基本印", "") == "":
+            curr_p["基本印"] = "☆"
+            
     return list(player_dict.values())
 
 def calculate_brain_score(player):
     score = player.get("競走得点", 0.0)
+    
+    # ★計算用の印リストを更新（☆を追加）
     mark_scores = {
         "◎": 10, "◯": 8, "△": 6, "✕": 4, "×": 4,
-        "⑳": 0, "●": 0, "▲": 0, "✖": 0, "☆★": 0, "T": 0
+        "⑳": 0, "●": 0, "▲": 0, "✖": 0, "☆": 0, "T": 0
     }
     score += mark_scores.get(player.get("基本印", ""), 0)
     score += (player.get("H", 0) + player.get("B", 0)) * 0.5 
