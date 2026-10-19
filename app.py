@@ -67,27 +67,27 @@ def extract_data_from_image(image):
     return json.loads(json_text)
 
 def apply_custom_marks(data):
-    """マスター直伝！左から優先・1個限定ルールを適用"""
+    """マスター直伝！左から優先・1個限定ルールを適用しつつ、ラインの所属情報も選手データに付与する"""
     players = data.get("選手", [])
     lines = data.get("並び予想", [])
     
     player_dict = {p["車番"]: p for p in players}
-    # 判定前の「本来の印」を記憶しておく
     original_marks = {p["車番"]: p.get("基本印", "") for p in players}
-    
-    # すでに使われた特殊印（⑳●▲✖）を記録する箱
     used_special_marks = set()
     
-    for line in lines:
+    # 各選手に「どのラインの何番手か」の情報を書き込む準備
+    for p in players:
+        p["ライン情報"] = {"ライン番号": -1, "ポジション": "不明"}
+
+    for line_idx, line in enumerate(lines):
         if len(line) == 1:
-            # 単騎の場合
             current_car = line[0]
             if current_car in player_dict:
                 curr_p = player_dict[current_car]
+                curr_p["ライン情報"] = {"ライン番号": line_idx + 1, "ポジション": "単騎"}
                 if original_marks[current_car] == "":
                     curr_p["基本印"] = "T" 
         else:
-            # ★左（前）から順番に処理していく！
             for i in range(len(line)):
                 current_car = line[i]
                 if current_car not in player_dict:
@@ -95,9 +95,11 @@ def apply_custom_marks(data):
                     
                 curr_p = player_dict[current_car]
                 
-                # 元が無印だった場合のみ変身チャンス
+                # ポジションの判定（先頭、番手、3番手以降）
+                pos_name = "先頭" if i == 0 else ("番手" if i == 1 else f"{i+1}番手")
+                curr_p["ライン情報"] = {"ライン番号": line_idx + 1, "ポジション": pos_name}
+                
                 if original_marks[current_car] == "":
-                    # 隣（前と後ろ）の選手の【元の印】を確認
                     neighbor_marks = []
                     if i > 0:
                         prev_car = line[i-1]
@@ -108,7 +110,6 @@ def apply_custom_marks(data):
                         if next_car in original_marks:
                             neighbor_marks.append(original_marks[next_car])
                             
-                    # 優先順位（◎ > ◯ > △ > ✕）＆ 1個限定ルール
                     if "◎" in neighbor_marks and "⑳" not in used_special_marks:
                         curr_p["基本印"] = "⑳"
                         used_special_marks.add("⑳")
@@ -122,20 +123,16 @@ def apply_custom_marks(data):
                         curr_p["基本印"] = "✖"
                         used_special_marks.add("✖")
                     else:
-                        # 恩恵を受けられない、または既に枠が埋まっていた場合は「☆」
                         curr_p["基本印"] = "☆"
                         
-    # 念のため、ライン予想から漏れた無印選手がいた場合はすべて「☆」にする
     for curr_p in player_dict.values():
         if curr_p.get("基本印", "") == "":
             curr_p["基本印"] = "☆"
             
-    return list(player_dict.values())
+    return list(player_dict.values()), lines
 
 def calculate_brain_score(player):
     score = player.get("競走得点", 0.0)
-    
-    # ★計算用の印リストを更新（☆を追加）
     mark_scores = {
         "◎": 10, "◯": 8, "△": 6, "✕": 4, "×": 4,
         "⑳": 0, "●": 0, "▲": 0, "✖": 0, "☆": 0, "T": 0
@@ -182,9 +179,9 @@ def generate_bets(players, max_2t_points, max_3t_points):
 # --- UI画面 ---
 st.set_page_config(page_title="バトルバンク君 - 競輪AI予想", page_icon="🚴‍♂️")
 st.title("🤖 バトルバンク君")
-st.markdown("新機能：画像の解析をストックして、後からまとめて結果を学習できます！")
+st.markdown("進化版：ラインの出所（どのラインの何番手か）も一緒に記録して学習します！")
 
-tab1, tab2 = st.tabs(["🎯 解析と予想", "📚 結果の学習（ストック）"])
+tab1, tab2, tab3 = st.tabs(["🎯 解析と予想", "📚 結果の学習（ストック）", "📊 学習データ分析"])
 
 with tab1:
     col_s1, col_s2 = st.columns(2)
@@ -199,10 +196,10 @@ with tab1:
         image = Image.open(uploaded_file)
         st.image(image, caption="解析中...", use_column_width=True)
         
-        with st.spinner("バトルバンク君が新ルールで画像を読み取っています..."):
+        with st.spinner("バトルバンク君がライン構成と出所を解析しています..."):
             try:
                 raw_data = extract_data_from_image(image)
-                players = apply_custom_marks(raw_data)
+                players, lines = apply_custom_marks(raw_data)
                 
                 for p in players:
                     p["AIスコア"] = calculate_brain_score(p)
@@ -214,10 +211,11 @@ with tab1:
                     "id": str(datetime.datetime.now().timestamp()),
                     "date": now_str,
                     "データ": players,
+                    "並び予想": lines,
                     "予測": bets
                 })
                 
-                st.success("解析完了！結果待ちリストにストックしました。")
+                st.success("解析完了！ライン情報も含めて結果待ちリストにストックしました。")
                 
                 st.markdown("### 🎯 バトルバンク君の買い目")
                 st.markdown("#### 🥇 【単勝】")
@@ -227,15 +225,15 @@ with tab1:
                 st.markdown(f"#### 🥉 【3連単 ({len(bets['3連単'])}点)】")
                 for b in bets["3連単"]: st.code(b)
                     
-                with st.expander("🔍 読み取った詳細データを見る"):
-                    st.json(players)
+                with st.expander("🔍 読み取った詳細データとライン情報を見る"):
+                    st.json({"選手データ": players, "並び予想": lines})
                         
             except Exception as e:
                 st.error(f"エラーが発生しました: {e}")
 
 with tab2:
     st.subheader("📝 結果待ちのレース一覧")
-    st.write("予想したレースがここに溜まります。不要なデータは削除できます。")
+    st.write("予想したレースがここに溜まります。着順を入力すると、各選手がどのラインの何番手だったかという情報と一緒に学習されます！")
     
     pending_races = load_json(PENDING_FILE)
     
@@ -258,6 +256,7 @@ with tab2:
                             history.append({
                                 "date": race['date'],
                                 "データ": race['データ'],
+                                "並び予想": race.get("並び予想", []),
                                 "予測": race['予測'],
                                 "実際の着順": actual_result
                             })
@@ -266,7 +265,7 @@ with tab2:
                             pending_races.pop(i)
                             save_json(PENDING_FILE, pending_races)
                             
-                            st.success("学習データを保存しました！")
+                            st.success("ライン情報を含めた学習データを保存しました！")
                             st.rerun()
                         else:
                             st.warning("着順を入力してください！")
@@ -277,3 +276,14 @@ with tab2:
                         save_json(PENDING_FILE, pending_races)
                         st.success("ストックを削除しました！")
                         st.rerun()
+
+with tab3:
+    st.subheader("📊 学習データ分析（ライン出所の確認）")
+    history_data = load_json(DATA_FILE)
+    if not history_data:
+        st.info("まだ学習済みのデータがありません。レース結果を学習させるとここに蓄積されます！")
+    else:
+        st.write(f"現在 **{len(history_data)}レース分** のデータが学習されています。")
+        for h in history_data:
+            with st.expander(f"学習日: {h['date']} (結果: {h['actual_result'] if 'actual_result' in h else h.get('実際の着順', '不明')})"):
+                st.json(h)
