@@ -31,11 +31,11 @@ def save_pending_race(race_data):
     save_json(PENDING_FILE, pending)
 
 def extract_data_from_image(image):
-    """Geminiを使って画像からデータと『並び予想』を抽出"""
+    """Geminiを使って画像からデータと『並び予想』を抽出（終了レース対応）"""
     model = genai.GenerativeModel('gemini-flash-latest')
     
     prompt = """
-    This is a Keirin (cycling) race card. Extract player data and line predictions into JSON format.
+    This is a Keirin (cycling) race card, which may show '終了' (finished) status. Regardless of the race status, extract player data and line predictions into JSON format.
     Output ONLY valid JSON matching this exact schema, with no markdown formatting or other text:
     {
       "選手": [
@@ -161,7 +161,6 @@ def generate_bets(players, max_2t_points, max_3t_points):
         f"{p1} - {p4}", f"{p2} - {p3}", f"{p3} - {p1}", f"{p1} - {p5}"
     ]
     
-    # AIスコア上位から、より多くの3連単パターン（最大25点まで）を自動生成！
     santantan_candidates = [
         f"{p1} - {p2} - {p3}", f"{p1} - {p2} - {p4}", f"{p1} - {p3} - {p2}",
         f"{p1} - {p3} - {p4}", f"{p2} - {p1} - {p3}", f"{p2} - {p1} - {p4}",
@@ -183,7 +182,7 @@ def generate_bets(players, max_2t_points, max_3t_points):
 # --- UI画面 ---
 st.set_page_config(page_title="バトルバンク君 - 競輪AI予想", page_icon="🚴‍♂️")
 st.title("🤖 バトルバンク君")
-st.markdown("完全版：3連単の点数を最大25点まで自由に変更可能！")
+st.markdown("完全版：終了したレースの画像でもスイスイ読み込み可能！")
 
 tab1, tab2, tab3 = st.tabs(["🎯 解析と予想", "📚 結果の学習（ストック）", "📊 収支・データ分析"])
 
@@ -192,16 +191,15 @@ with tab1:
     with col_s1:
         max_2t_points = st.slider("2連単の点数", 2, 6, 4)
     with col_s2:
-        # ★3連単の点数を「6〜25点」の間で自由にスライダー選択できるように変更！
         max_3t_points = st.slider("3連単の点数", 6, 25, 12, step=1)
 
-    uploaded_file = st.file_uploader("出走表をアップロード", type=["png", "jpg", "jpeg"])
+    uploaded_file = st.file_uploader("出走表をアップロード（終了レースも可）", type=["png", "jpg", "jpeg"])
 
     if uploaded_file is not None:
         image = Image.open(uploaded_file)
         st.image(image, caption="解析中...", use_column_width=True)
         
-        with st.spinner("バトルバンク君が画像を解析しています..."):
+        with st.spinner("バトルバンク君が終了レースのデータを解析しています..."):
             try:
                 raw_data = extract_data_from_image(image)
                 players, lines = apply_custom_marks(raw_data)
