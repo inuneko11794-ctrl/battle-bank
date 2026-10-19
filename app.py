@@ -154,17 +154,24 @@ def generate_bets(players, max_2t_points, max_3t_points):
     p3 = sorted_players[2]["車番"]
     p4 = sorted_players[3]["車番"] if len(sorted_players) > 3 else p3
     p5 = sorted_players[4]["車番"] if len(sorted_players) > 4 else p4
+    p6 = sorted_players[5]["車番"] if len(sorted_players) > 5 else p5
     
     nitantan_candidates = [
         f"{p1} - {p2}", f"{p1} - {p3}", f"{p2} - {p1}",
         f"{p1} - {p4}", f"{p2} - {p3}", f"{p3} - {p1}", f"{p1} - {p5}"
     ]
     
+    # AIスコア上位から、より多くの3連単パターン（最大25点まで）を自動生成！
     santantan_candidates = [
         f"{p1} - {p2} - {p3}", f"{p1} - {p2} - {p4}", f"{p1} - {p3} - {p2}",
         f"{p1} - {p3} - {p4}", f"{p2} - {p1} - {p3}", f"{p2} - {p1} - {p4}",
         f"{p1} - {p4} - {p2}", f"{p1} - {p4} - {p3}", f"{p1} - {p2} - {p5}",
-        f"{p1} - {p3} - {p5}", f"{p2} - {p3} - {p1}", f"{p1} - {p5} - {p2}"
+        f"{p1} - {p3} - {p5}", f"{p2} - {p3} - {p1}", f"{p1} - {p5} - {p2}",
+        f"{p2} - {p1} - {p4}", f"{p2} - {p3} - {p4}", f"{p3} - {p1} - {p2}",
+        f"{p3} - {p1} - {p4}", f"{p1} - {p2} - {p6}", f"{p1} - {p3} - {p6}",
+        f"{p1} - {p4} - {p6}", f"{p2} - {p3} - {p5}", f"{p3} - {p2} - {p1}",
+        f"{p1} - {p5} - {p3}", f"{p2} - {p5} - {p1}", f"{p3} - {p2} - {p4}",
+        f"{p1} - {p6} - {p2}"
     ]
     
     return {
@@ -176,7 +183,7 @@ def generate_bets(players, max_2t_points, max_3t_points):
 # --- UI画面 ---
 st.set_page_config(page_title="バトルバンク君 - 競輪AI予想", page_icon="🚴‍♂️")
 st.title("🤖 バトルバンク君")
-st.markdown("完全版：期間指定での収支・回収率フィルター機能付き！")
+st.markdown("完全版：3連単の点数を最大25点まで自由に変更可能！")
 
 tab1, tab2, tab3 = st.tabs(["🎯 解析と予想", "📚 結果の学習（ストック）", "📊 収支・データ分析"])
 
@@ -185,7 +192,8 @@ with tab1:
     with col_s1:
         max_2t_points = st.slider("2連単の点数", 2, 6, 4)
     with col_s2:
-        max_3t_points = st.slider("3連単の点数", 3, 12, 6)
+        # ★3連単の点数を「6〜25点」の間で自由にスライダー選択できるように変更！
+        max_3t_points = st.slider("3連単の点数", 6, 25, 12, step=1)
 
     uploaded_file = st.file_uploader("出走表をアップロード", type=["png", "jpg", "jpeg"])
 
@@ -293,11 +301,9 @@ with tab3:
     if not history_data:
         st.info("まだ学習・収支データがありません。「結果の学習」タブからレース結果と収支を入力してください！")
     else:
-        # --- 期間フィルター用の日付選択 ---
         st.markdown("#### 📅 表示する期間の絞り込み")
         col_d1, col_d2 = st.columns(2)
         
-        # 登録されているデータから最小日と最大日を探す
         dates = [h['date'][:10] for h in history_data if 'date' in h]
         min_date_str = min(dates) if dates else "2026-01-01"
         max_date_str = max(dates) if dates else "2026-12-31"
@@ -310,7 +316,6 @@ with tab3:
         with col_d2:
             end_date = st.date_input("終了日", value=default_end)
             
-        # 期間内でフィルタリング
         filtered_history = []
         for h in history_data:
             h_date_str = h.get('date', '')[:10]
@@ -319,7 +324,7 @@ with tab3:
                 if start_date <= h_date <= end_date:
                     filtered_history.append(h)
             except:
-                filtered_history.append(h) # 日付の形式が万が一違う場合は含める
+                filtered_history.append(h)
                 
         st.markdown("---")
         
