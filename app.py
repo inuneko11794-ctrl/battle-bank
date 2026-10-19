@@ -35,8 +35,8 @@ def extract_data_from_image(image):
     model = genai.GenerativeModel('gemini-flash-latest')
     
     prompt = """
-    この競輪の出走表画像から、選手のデータと「並び予想（ライン）」を抽出してJSON形式で出力してください。
-    以下のフォーマットのみを出力し、他のテキストは含めないでください。
+    This is a Keirin (cycling) race card. Extract player data and line predictions into JSON format.
+    Output ONLY valid JSON matching this exact schema, with no markdown formatting or other text:
     {
       "選手": [
         {
@@ -75,7 +75,6 @@ def apply_custom_marks(data):
     original_marks = {p["車番"]: p.get("基本印", "") for p in players}
     used_special_marks = set()
     
-    # 各選手に「どのラインの何番手か」の情報を書き込む準備
     for p in players:
         p["ライン情報"] = {"ライン番号": -1, "ポジション": "不明"}
 
@@ -94,8 +93,6 @@ def apply_custom_marks(data):
                     continue
                     
                 curr_p = player_dict[current_car]
-                
-                # ポジションの判定（先頭、番手、3番手以降）
                 pos_name = "先頭" if i == 0 else ("番手" if i == 1 else f"{i+1}番手")
                 curr_p["ライン情報"] = {"ライン番号": line_idx + 1, "ポジション": pos_name}
                 
@@ -179,9 +176,9 @@ def generate_bets(players, max_2t_points, max_3t_points):
 # --- UI画面 ---
 st.set_page_config(page_title="バトルバンク君 - 競輪AI予想", page_icon="🚴‍♂️")
 st.title("🤖 バトルバンク君")
-st.markdown("進化版：ラインの出所（どのラインの何番手か）も一緒に記録して学習します！")
+st.markdown("完全版：期間指定での収支・回収率フィルター機能付き！")
 
-tab1, tab2, tab3 = st.tabs(["🎯 解析と予想", "📚 結果の学習（ストック）", "📊 学習データ分析"])
+tab1, tab2, tab3 = st.tabs(["🎯 解析と予想", "📚 結果の学習（ストック）", "📊 収支・データ分析"])
 
 with tab1:
     col_s1, col_s2 = st.columns(2)
@@ -196,7 +193,7 @@ with tab1:
         image = Image.open(uploaded_file)
         st.image(image, caption="解析中...", use_column_width=True)
         
-        with st.spinner("バトルバンク君がライン構成と出所を解析しています..."):
+        with st.spinner("バトルバンク君が画像を解析しています..."):
             try:
                 raw_data = extract_data_from_image(image)
                 players, lines = apply_custom_marks(raw_data)
@@ -215,7 +212,7 @@ with tab1:
                     "予測": bets
                 })
                 
-                st.success("解析完了！ライン情報も含めて結果待ちリストにストックしました。")
+                st.success("解析完了！結果待ちリストにストックしました。")
                 
                 st.markdown("### 🎯 バトルバンク君の買い目")
                 st.markdown("#### 🥇 【単勝】")
@@ -225,7 +222,7 @@ with tab1:
                 st.markdown(f"#### 🥉 【3連単 ({len(bets['3連単'])}点)】")
                 for b in bets["3連単"]: st.code(b)
                     
-                with st.expander("🔍 読み取った詳細データとライン情報を見る"):
+                with st.expander("🔍 読み取った詳細データを見る"):
                     st.json({"選手データ": players, "並び予想": lines})
                         
             except Exception as e:
@@ -233,7 +230,7 @@ with tab1:
 
 with tab2:
     st.subheader("📝 結果待ちのレース一覧")
-    st.write("予想したレースがここに溜まります。着順を入力すると、各選手がどのラインの何番手だったかという情報と一緒に学習されます！")
+    st.write("予想したレースがここに溜まります。レース終了後に着順、収支、メモを入力して学習させましょう！")
     
     pending_races = load_json(PENDING_FILE)
     
@@ -246,11 +243,19 @@ with tab2:
                 st.write(f"2連単: {', '.join(race['予測']['2連単'])}")
                 st.write(f"3連単: {', '.join(race['予測']['3連単'])}")
                 
-                actual_result = st.text_input("実際の着順を入力（例: 1-2-3）", key=f"res_{race['id']}")
+                actual_result = st.text_input("実際の着順（例: 1-2-3）", key=f"res_{race['id']}")
+                
+                col_i1, col_i2 = st.columns(2)
+                with col_i1:
+                    investment = st.number_input("投資金額 (円)", min_value=0, value=1000, step=100, key=f"inv_{race['id']}")
+                with col_i2:
+                    payout = st.number_input("払戻金額 (円)", min_value=0, value=0, step=100, key=f"pay_{race['id']}")
+                
+                memo = st.text_area("レースメモ・感想（例: 展開が向いた、固かった等）", key=f"memo_{race['id']}")
                 
                 col_btn1, col_btn2 = st.columns(2)
                 with col_btn1:
-                    if st.button("学習させる", key=f"btn_{race['id']}"):
+                    if st.button("学習させる（収支を記録）", key=f"btn_{race['id']}"):
                         if actual_result:
                             history = load_json(DATA_FILE)
                             history.append({
@@ -258,14 +263,18 @@ with tab2:
                                 "データ": race['データ'],
                                 "並び予想": race.get("並び予想", []),
                                 "予測": race['予測'],
-                                "実際の着順": actual_result
+                                "実際の着順": actual_result,
+                                "投資額": investment,
+                                "払戻額": payout,
+                                "収支": payout - investment,
+                                "メモ": memo
                             })
                             save_json(DATA_FILE, history)
                             
                             pending_races.pop(i)
                             save_json(PENDING_FILE, pending_races)
                             
-                            st.success("ライン情報を含めた学習データを保存しました！")
+                            st.success("収支データを含めて学習を保存しました！")
                             st.rerun()
                         else:
                             st.warning("着順を入力してください！")
@@ -278,12 +287,62 @@ with tab2:
                         st.rerun()
 
 with tab3:
-    st.subheader("📊 学習データ分析（ライン出所の確認）")
+    st.subheader("📊 収支・データ分析")
     history_data = load_json(DATA_FILE)
+    
     if not history_data:
-        st.info("まだ学習済みのデータがありません。レース結果を学習させるとここに蓄積されます！")
+        st.info("まだ学習・収支データがありません。「結果の学習」タブからレース結果と収支を入力してください！")
     else:
-        st.write(f"現在 **{len(history_data)}レース分** のデータが学習されています。")
+        # --- 期間フィルター用の日付選択 ---
+        st.markdown("#### 📅 表示する期間の絞り込み")
+        col_d1, col_d2 = st.columns(2)
+        
+        # 登録されているデータから最小日と最大日を探す
+        dates = [h['date'][:10] for h in history_data if 'date' in h]
+        min_date_str = min(dates) if dates else "2026-01-01"
+        max_date_str = max(dates) if dates else "2026-12-31"
+        
+        default_start = datetime.datetime.strptime(min_date_str, "%Y-%m-%d").date()
+        default_end = datetime.datetime.strptime(max_date_str, "%Y-%m-%d").date()
+        
+        with col_d1:
+            start_date = st.date_input("開始日", value=default_start)
+        with col_d2:
+            end_date = st.date_input("終了日", value=default_end)
+            
+        # 期間内でフィルタリング
+        filtered_history = []
         for h in history_data:
-            with st.expander(f"学習日: {h['date']} (結果: {h['actual_result'] if 'actual_result' in h else h.get('実際の着順', '不明')})"):
-                st.json(h)
+            h_date_str = h.get('date', '')[:10]
+            try:
+                h_date = datetime.datetime.strptime(h_date_str, "%Y-%m-%d").date()
+                if start_date <= h_date <= end_date:
+                    filtered_history.append(h)
+            except:
+                filtered_history.append(h) # 日付の形式が万が一違う場合は含める
+                
+        st.markdown("---")
+        
+        if not filtered_history:
+            st.warning("指定された期間のデータはありません。")
+        else:
+            total_inv = sum(h.get("投資額", 0) for h in filtered_history)
+            total_pay = sum(h.get("払戻額", 0) for h in filtered_history)
+            total_profit = total_pay - total_inv
+            recovery_rate = (total_pay / total_inv * 100) if total_inv > 0 else 0
+            
+            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+            col_m1.metric("期間内 投資額", f"{total_inv:,} 円")
+            col_m2.metric("期間内 払戻額", f"{total_pay:,} 円")
+            col_m3.metric("期間内 収支", f"{total_profit:+,} 円", delta_color="normal" if total_profit >= 0 else "inverse")
+            col_m4.metric("期間内 回収率", f"{recovery_rate:.1f}%")
+            
+            st.markdown("---")
+            st.subheader(f"📝 選択期間のレース履歴 ({len(filtered_history)}件)")
+            for h in filtered_history:
+                profit_str = f"{h.get('収支', 0):+,} 円"
+                with st.expander(f"📅 {h['date']} | 結果: {h.get('実際の着順', '不明')} | 収支: {profit_str}"):
+                    st.write(f"**投資**: {h.get('投資額', 0):,}円 / **払戻**: {h.get('払戻額', 0):,}円")
+                    if h.get("メモ"):
+                        st.write(f"**メモ**: {h.get('メモ')}")
+                    st.json(h)
