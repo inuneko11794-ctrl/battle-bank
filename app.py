@@ -147,3 +147,4 @@ if uploaded_file is not None:
                     
         except Exception as e:
             st.error(f"エラーが発生しました: {e}")
+※選手名が読み取れない場合は "" (空白) にすること
