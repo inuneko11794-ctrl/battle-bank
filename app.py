@@ -26,7 +26,8 @@ def save_history(new_data):
 
 def extract_data_from_image(image):
     """Geminiを使って画像から出走表データを抽出"""
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # ★ここをより高精度で確実な gemini-1.5-pro に変更しました！
+    model = genai.GenerativeModel('gemini-1.5-pro')
     prompt = """
     この競輪の出走表画像から、選手のデータを抽出してJSON形式で出力してください。
     以下のフォーマットの配列（リスト）のみを出力し、他のテキストは含めないでください。
