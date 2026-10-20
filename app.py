@@ -55,6 +55,183 @@ def get_payout_category(payout):
 def get_race_pattern(lines):
     real_lines = [l for l in lines if len(l) >= 2]
     cnt = len(real_lines)
+    if cnt == 2: return "2分戦"
+    elif cnt == 3: return "3分戦"
+    elif cnt >= 4: return "細切れ戦"
+    else: return "先行一車/その他"
+
+def update_scores_and_get_details(actual_result_str, race_players, lines):
+    try:
+        places = [int(x.strip()) for x in actual_result_str.replace("ー", "-").split("-")]
+    except:
+        return "入力エラー", [], "不明"
+
+    mark_scores = load_json(SCORE_FILE, DEFAULT_MARK_SCORES)
+    line_scores = load_json(LINE_SCORE_FILE, DEFAULT_LINE_SCORES)
+    rewards = {0: 1.0, 1: 0.5, 2: 0.2}
+    
+    sorted_p = sorted(race_players, key=lambda x: x.get("AIスコア", 0), reverse=True)
+    rank_map = {p["車番"]: idx + 1 for idx, p in enumerate(sorted_p)}
+    
+    line_result = []
+    place_details = []
+
+    for i, car_num in enumerate(places):
+        for p in race_players:
+            if p["車番"] == car_num:
+                l_num = p.get("ライン情報", {}).get("ライン番号")
+                pos = p.get("ライン情報", {}).get("ポジション", "")
+                mark = p.get("基本印", "")
+                leg = p.get("脚質", "不明")
+                
+                line_str = f"L{l_num}({pos})" if l_num is not None else "単騎"
+                line_result.append(line_str)
+                
+                place_details.append({
+                    "着順": i + 1,
+                    "車番": car_num,
+                    "印": mark if mark else "印なし",
+                    "ライン情報": line_str,
+                    "脚質_ポジション": f"{leg}・{pos}",
+                    "AI順位": rank_map.get(car_num, 99)
+                })
+                
+                if l_num is not None and str(l_num) in line_scores:
+                    line_scores[str(l_num)] += rewards.get(i, 0.0)
+                if mark in mark_scores:
+                    mark_scores[mark] += rewards.get(i, 0.0)
+
+    for p in race_players:
+        if p["車番"] not in places:
+            mark = p.get("基本印", "")
+            if mark in mark_scores: mark_scores[mark] -= 0.1
+            l_num = p.get("ライン情報", {}).get("ライン番号")
+            if l_num is not None and str(l_num) in line_scores:
+                line_scores[str(l_num)] -= 0.1
+
+    for k in mark_scores: mark_scores[k] = round(mark_scores[k], 2)
+    for k in line_scores: line_scores[k] = round(line_scores[k], 2)
+        
+    save_json(SCORE_FILE, mark_scores)
+    save_json(LINE_SCORE_FILE, line_scores)
+    
+    pattern = get_race_pattern(lines)
+    return " - ".join(line_result), place_details, pattern
+
+# ★ 画像解析関数
+def extract_data_from_image(image):
+    model = genai.GenerativeModel('gemini-flash-latest')
+    prompt = """Fast JSON extract:
+{"選手":[{"車番":1,"選手名":"","競走得点":100.0,"基本印":"◎","ライン役割":"先頭","脚質":"逃","H":0,"B":0,"逃":0,"捲":0,"差":0,"マ":0}],"並び予想":[[1,2],[3]]}
+Only valid JSON."""
+    response = model.generate_content([prompt, image])
+    json_text = response.text.replace('```json', '').replace('```', '').strip()
+    return json.loads(json_text)
+
+def apply_custom_marks(data):
+    players = data.get("選手", [])
+    lines = data.get("並び予想", [])
+    
+    player_dict = {p["車番"]: p for p in players}
+    original_marks = {p["車番"]: p.get("基本印", "") for p in players}
+    used_special_marks = set()
+    
+    for p in players:
+        p["ライン情報"] = {"ライン番号": None, "ポジション": "単騎"}
+
+    real_line_count = 0
+    for line in lines:
+        if len(line) >= 2:
+            real_line_count += 1
+            for i in range(len(line)):
+                current_car = line[i]
+                if current_car not in player_dict: continue
+                curr_p = player_dict[current_car]
+                pos_name = "先頭" if i == 0 else ("番手" if i == 1 else f"{i+1}番手")
+                curr_p["ライン情報"] = {"ライン番号": real_line_count, "ポジション": pos_name}
+                
+                if original_marks[current_car] == "":
+                    neighbor_marks = []
+                    if i > 0 and line[i-1] in original_marks: neighbor_marks.append(original_marks[line[i-1]])
+                    if i < len(line) - 1 and line[i+1] in original_marks: neighbor_marks.append(original_marks[line[i+1]])
+                            
+                    if "◎" in neighbor_marks and "⑳" not in used_special_marks:
+                        curr_p["基本印"] = "⑳"; used_special_marks.add("⑳")
+                    elif "◯" in neighbor_marks and "●" not in used_special_marks:
+                        curr_p["基本印"] = "●"; used_special_marks.add("●")
+                    elif "△" in neighbor_marks and "▲" not in used_special_marks:
+                        curr_p["基本印"] = "▲"; used_special_marks.add("▲")
+                    elif ("✕" in neighbor_marks or "×" in neighbor_marks) and "✖" not in used_special_marks:
+                        curr_p["基本印"] = "✖"; used_special_marks.add("✖")
+                    else:
+                        curr_p["基本印"] = "☆"
+        elif len(line) == 1:
+            current_car = line[0]
+            if current_car in player_dict:
+                curr_p = player_dict[current_car]
+                curr_p["ライン情報"] = {"ライン番号": None, "ポジション": "単騎"}
+                if original_marks[current_car] == "": curr_p["基本印"] = "T"
+
+    for curr_p in player_dict.values():
+        if curr_p.get("基本印", "") == "":
+            curr_p["基本印"] = "T" if curr_p["ライン情報"]["ポジション"] == "単騎" else "☆"
+            
+    return list(player_dict.values()), lines
+
+def calculate_brain_score(player, current_mark_scores, current_line_scores):
+    score = player.get("競走得点", 0.0)
+    mark = player.get("基本印", "")
+    score += current_mark_scores.get(mark, 0.0)
+    
+    l_num = player.get("ライン情報", {}).get("ライン番号")
+    if l_num is not None:
+        score += current_line_scores.get(str(l_num), 0.0)
+    
+    score += (player.get("H", 0) + player.get("B", 0)) * 0.5 
+    role = player.get("ライン情報", {}).get("ポジション", "不明")
+    if role == "先頭" or role == "単騎":
+        score += (player.get("逃", 0) + player.get("捲", 0)) * 0.8
+    else:
+        score += (player.get("差", 0) + player.get("マ", 0)) * 0.8
+    return round(score, 2)
+
+def get_p_str(car, players):
+    for p in players:
+        if p["車番"] == car:
+            l_num = p.get("ライン情報", {}).get("ライン番号")
+            return f"{car}(L{l_num})" if l_num is not None else f"{car}(単)"
+    return str(car)
+
+def generate_bets(players, max_2t_points, max_3t_points):
+    sorted_players = sorted(players, key=lambda x: x["AIスコア"], reverse=True)
+    if len(sorted_players) < 3: return {"単勝": [], "2連単": [], "3連単": []}
+    
+    p1, p2, p3 = sorted_players[0]["車番"], sorted_players[1]["車番"], sorted_players[2]["車番"]
+    p4 = sorted_players[3]["車番"] if len(sorted_players) > 3 else p3
+    p5 = sorted_players[4]["車番"] if len(sorted_players) > 4 else p4
+    p6 = sorted_players[5]["車番"] if len(sorted_players) > 5 else p5
+    
+    nitantan = [
+        f"{get_p_str(p1, players)} - {get_p_str(p2, players)}", f"{get_p_str(p1, players)} - {get_p_str(p3, players)}",
+        f"{get_p_str(p2, players)} - {get_p_str(p1, players)}", f"{get_p_str(p1, players)} - {get_p_str(p4, players)}",
+        f"{get_p_str(p2, players)} - {get_p_str(p3, players)}", f"{get_p_str(p3, players)} - {get_p_str(p1, players)}"
+    ]
+    
+    santantan = [
+        f"{get_p_str(p1, players)} - {get_p_str(p2, players)} - {get_p_str(p3, players)}", 
+        f"{get_p_str(p1, players)} - {get_p_str(p2, players)} - {get_p_str(p4, players)}",
+        f"{get_p_str(p1, players)} - {get_p_str(p3, players)} - {get_p_str(p2, players)}",
+        f"{get_p_str(p1, players)} - {get_p_str(p3, players)} - {get_p_str(p4, players)}",
+        f"{get_p_str(p2, players)} - {get_p_str(p1, players)} - {get_p_str(p3, players)}",
+        f"{get_p_str(p2, players)} - {get_p_str(p1, players)} - {get_p_str(p4, players)}",
+        f"{get_p_str(p1, players)} - {get_p_str(p4, players)} - {get_p_str(p2, players)}",
+        f"{get_p_str(p1, players)} - {get_p_str(p4, players)} - {get_p_str(p3, players)}",
+        f"{get_p_str(p1, players)} - {get_p_str(p2, players)} - {get_p_str(p5, players)}",
+        f"{get_p_str(p1, players)} - {get_p_str(p3, players)} - {get_p_str(p5, players)}",
+        f"{get_p_str(p2, players)} - {get_p_str(p3, players)} - {get_p_str(p1, players)}",
+        f"{get_p_str(p1, players)} - {get_p_str(p5, players)} - {get_p_str(p2, players)}"
+    ]
+    return {"単勝": [f"{get_p_str(p1, players)}"], "2連単": nitantan[:max_2t_points], "3連単": santantan[:max_3t_points]}
 # --- ここから Part 2 ---
 
 st.set_page_config(page_title="バトルバンク君 - 競輪AI予想", page_icon="🚴‍♂️")
