@@ -52,10 +52,13 @@ def update_mark_scores_and_get_line_result(actual_result_str, race_players):
     for i, car_num in enumerate(places):
         for p in race_players:
             if p["車番"] == car_num:
-                # ライン結果の記録
-                l_num = p.get("ライン情報", {}).get("ライン番号", "?")
+                # ライン結果の記録（単騎の場合は L番号 なし）
+                l_num = p.get("ライン情報", {}).get("ライン番号")
                 pos = p.get("ライン情報", {}).get("ポジション", "")
-                line_result.append(f"L{l_num}({pos})")
+                if l_num is not None:
+                    line_result.append(f"L{l_num}({pos})")
+                else:
+                    line_result.append("単騎")
                 
                 # 印スコアの加算
                 mark = p.get("基本印", "")
@@ -96,6 +99,7 @@ def extract_data_from_image(image):
     return json.loads(json_text)
 
 def apply_custom_marks(data):
+    """単騎はライン番号に含めず分離してマスターのカスタム印を適用"""
     players = data.get("選手", [])
     lines = data.get("並び予想", [])
     
@@ -103,18 +107,14 @@ def apply_custom_marks(data):
     original_marks = {p["車番"]: p.get("基本印", "") for p in players}
     used_special_marks = set()
     
+    # デフォルトは単騎設定
     for p in players:
-        p["ライン情報"] = {"ライン番号": -1, "ポジション": "不明"}
+        p["ライン情報"] = {"ライン番号": None, "ポジション": "単騎"}
 
-    for line_idx, line in enumerate(lines):
-        if len(line) == 1:
-            current_car = line[0]
-            if current_car in player_dict:
-                curr_p = player_dict[current_car]
-                curr_p["ライン情報"] = {"ライン番号": line_idx + 1, "ポジション": "単騎"}
-                if original_marks[current_car] == "":
-                    curr_p["基本印"] = "T" 
-        else:
+    real_line_count = 0
+    for line in lines:
+        if len(line) >= 2:
+            real_line_count += 1
             for i in range(len(line)):
                 current_car = line[i]
                 if current_car not in player_dict:
@@ -122,7 +122,7 @@ def apply_custom_marks(data):
                     
                 curr_p = player_dict[current_car]
                 pos_name = "先頭" if i == 0 else ("番手" if i == 1 else f"{i+1}番手")
-                curr_p["ライン情報"] = {"ライン番号": line_idx + 1, "ポジション": pos_name}
+                curr_p["ライン情報"] = {"ライン番号": real_line_count, "ポジション": pos_name}
                 
                 if original_marks[current_car] == "":
                     neighbor_marks = []
@@ -149,10 +149,20 @@ def apply_custom_marks(data):
                         used_special_marks.add("✖")
                     else:
                         curr_p["基本印"] = "☆"
-                        
+        elif len(line) == 1:
+            current_car = line[0]
+            if current_car in player_dict:
+                curr_p = player_dict[current_car]
+                curr_p["ライン情報"] = {"ライン番号": None, "ポジション": "単騎"}
+                if original_marks[current_car] == "":
+                    curr_p["基本印"] = "T"
+
     for curr_p in player_dict.values():
         if curr_p.get("基本印", "") == "":
-            curr_p["基本印"] = "☆"
+            if curr_p["ライン情報"]["ポジション"] == "単騎":
+                curr_p["基本印"] = "T"
+            else:
+                curr_p["基本印"] = "☆"
             
     return list(player_dict.values()), lines
 
@@ -160,9 +170,7 @@ def calculate_brain_score(player, current_scores):
     score = player.get("競走得点", 0.0)
     mark = player.get("基本印", "")
     
-    # 学習済みのスコアを加算
     score += current_scores.get(mark, 0.0)
-    
     score += (player.get("H", 0) + player.get("B", 0)) * 0.5 
     
     role = player.get("ライン情報", {}).get("ポジション", "不明")
@@ -173,11 +181,14 @@ def calculate_brain_score(player, current_scores):
     return round(score, 2)
 
 def get_p_str(car, players):
-    """車番にライン情報を付けて表示する（例: 1(L1) ）"""
+    """車番にライン情報を付けて表示する（例: 1(L1), 5(単) ）"""
     for p in players:
         if p["車番"] == car:
-            l_num = p.get("ライン情報", {}).get("ライン番号", "?")
-            return f"{car}(L{l_num})"
+            l_num = p.get("ライン情報", {}).get("ライン番号")
+            if l_num is not None:
+                return f"{car}(L{l_num})"
+            else:
+                return f"{car}(単)"
     return str(car)
 
 def generate_bets(players, max_2t_points, max_3t_points):
@@ -220,7 +231,7 @@ def generate_bets(players, max_2t_points, max_3t_points):
 # --- UI画面 ---
 st.set_page_config(page_title="バトルバンク君 - 競輪AI予想", page_icon="🚴‍♂️")
 st.title("🤖 バトルバンク君")
-st.markdown("進化版：学習で「印スコア」が自動成長＆ライン情報も表示！")
+st.markdown("進化版：学習で「印スコア」が自動成長＆単騎を正しく分離表示！")
 
 tab1, tab2, tab3 = st.tabs(["🎯 解析と予想", "📚 結果の学習（ストック）", "📊 収支・データ分析"])
 
@@ -243,7 +254,6 @@ with tab1:
                     raw_data = extract_data_from_image(image)
                     players, lines = apply_custom_marks(raw_data)
                     
-                    # 現在の学習済みスコアをロードして計算に適用
                     current_scores = load_json(SCORE_FILE, DEFAULT_MARK_SCORES)
                     for p in players:
                         p["AIスコア"] = calculate_brain_score(p, current_scores)
@@ -256,7 +266,7 @@ with tab1:
                     })
                     st.success("解析完了！結果待ちリストにストックしました。")
                     
-                    st.markdown("### 🎯 バトルバンク君の買い目 (L1=ライン1)")
+                    st.markdown("### 🎯 バトルバンク君の買い目 (L1=ライン1, 単=単騎)")
                     st.markdown("#### 🥇 【単勝】")
                     for b in bets["単勝"]: st.code(b)
                     st.markdown(f"#### 🥈 【2連単 ({len(bets['2連単'])}点)】")
@@ -290,17 +300,16 @@ with tab1:
                 })
         
         st.markdown("#### 並び予想（ライン）の入力")
+        st.caption("※2車以上のラインのみ入力してください。ラインに入力しなかった車番は自動的に「単騎」扱いになります。")
         line_str_1 = st.text_input("ライン1（例: 1,7,2）", value="1, 7, 2")
-        line_str_2 = st.text_input("ライン2（例: 5 または 4,3,6）", value="5")
+        line_str_2 = st.text_input("ライン2（例: 4,3,6）", value="4, 3, 6")
         line_str_3 = st.text_input("ライン3（任意）", value="")
-        # ★ ここにライン4とライン5を追加！
         line_str_4 = st.text_input("ライン4（任意）", value="")
         line_str_5 = st.text_input("ライン5（任意）", value="")
         
         if st.button("✍️ 手動データを解析・ストックする"):
             try:
                 lines = []
-                # ★ 判定するリストを5つまでに拡張
                 for l_str in [line_str_1, line_str_2, line_str_3, line_str_4, line_str_5]:
                     if l_str.strip():
                         cars = [int(x.strip()) for x in l_str.split(",") if x.strip().isdigit()]
@@ -321,7 +330,7 @@ with tab1:
                 })
                 st.success("手動データの解析完了！ストックしました。")
                 
-                st.markdown("### 🎯 バトルバンク君の買い目 (L1=ライン1)")
+                st.markdown("### 🎯 バトルバンク君の買い目 (L1=ライン1, 単=単騎)")
                 for b in bets["単勝"]: st.code(b)
                 for b in bets["2連単"]: st.code(b)
                 for b in bets["3連単"]: st.code(b)
@@ -353,7 +362,6 @@ with tab2:
                 with col_btn1:
                     if st.button("学習させる（印スコア自動更新）", key=f"btn_{race['id']}"):
                         if actual_result:
-                            # 印スコアの更新と決着ラインの算出
                             line_str = update_mark_scores_and_get_line_result(actual_result, race['データ'])
                             
                             history = load_json(DATA_FILE, [])
