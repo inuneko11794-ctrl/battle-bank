@@ -97,6 +97,7 @@ def apply_custom_marks(data):
                 pos_name = "先頭" if i == 0 else ("番手" if i == 1 else f"{i+1}番手")
                 curr_p["ライン情報"] = {"ライン番号": line_idx + 1, "ポジション": pos_name}
                 
+                # すでに手動で印が入力されている場合はそれを優先、空欄なら自動補完ルールを適用
                 if original_marks[current_car] == "":
                     neighbor_marks = []
                     if i > 0:
@@ -183,7 +184,7 @@ def generate_bets(players, max_2t_points, max_3t_points):
 # --- UI画面 ---
 st.set_page_config(page_title="バトルバンク君 - 競輪AI予想", page_icon="🚴‍♂️")
 st.title("🤖 バトルバンク君")
-st.markdown("完全ハイブリッド版：AI自動読み取り ＆ 手動入力に対応！")
+st.markdown("完全ハイブリッド版：手動入力でも全カスタム印が選べるようになりました！")
 
 tab1, tab2, tab3 = st.tabs(["🎯 解析と予想", "📚 結果の学習（ストック）", "📊 収支・データ分析"])
 
@@ -239,7 +240,7 @@ with tab1:
                     st.error(f"エラーが発生しました: {e}")
 
     else:
-        # --- 手動入力モード ---
+        # --- 手動入力モード（全カスタム印選択対応） ---
         st.subheader("✍️ 手動データ入力モード")
         st.write("APIの制限を気にせず、選手データと並びを直接入力して予想・ストックできます。")
         
@@ -251,7 +252,14 @@ with tab1:
             with st.expander(f"車番 {c} の選手"):
                 m_name = st.text_input(f"選手名 (車番{c})", value=f"選手{c}", key=f"m_name_{c}")
                 m_score = st.number_input(f"競走得点 (車番{c})", min_value=70.0, max_value=120.0, value=90.0, step=0.01, key=f"m_score_{c}")
-                m_mark = st.selectbox(f"基本印 (車番{c})", ["", "◎", "◯", "△", "✕"], key=f"m_mark_{c}")
+                
+                # ★ ここで全カスタム印（◎, ◯, △, ✕, ⑳, ●, ▲, ✖, ☆, T）を選べるように拡張！
+                m_mark = st.selectbox(
+                    f"基本印 (車番{c})", 
+                    ["", "◎", "◯", "△", "✕", "⑳", "●", "▲", "✖", "☆", "T"], 
+                    key=f"m_mark_{c}"
+                )
+                
                 m_role = st.selectbox(f"役割 (車番{c})", ["先頭", "マーク", "単騎"], key=f"m_role_{c}")
                 
                 col_hb1, col_hb2 = st.columns(2)
@@ -281,7 +289,6 @@ with tab1:
         
         if st.button("✍️ 手動データを解析・ストックする"):
             try:
-                # 入力されたライン文字列を配列に変換
                 lines = []
                 for l_str in [line_str_1, line_str_2, line_str_3]:
                     if l_str.strip():
@@ -427,7 +434,7 @@ with tab3:
             
             st.markdown("---")
             st.subheader(f"📝 選択期間のレース履歴 ({len(filtered_history)}件)")
-            for h in filtered_history:
+            for h in history_data:
                 profit_str = f"{h.get('収支', 0):+,} 円"
                 with st.expander(f"📅 {h['date']} | 結果: {h.get('実際の着順', '不明')} | 収支: {profit_str}"):
                     st.write(f"**投資**: {h.get('投資額', 0):,}円 / **払戻**: {h.get('払戻額', 0):,}円")
