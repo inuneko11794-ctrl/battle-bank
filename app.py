@@ -118,7 +118,6 @@ def update_scores_and_get_details(actual_result_str, race_players, lines):
     pattern = get_race_pattern(lines)
     return " - ".join(line_result), place_details, pattern
 
-# ★ 画像解析関数
 def extract_data_from_image(image):
     model = genai.GenerativeModel('gemini-flash-latest')
     prompt = """Fast JSON extract:
@@ -195,13 +194,7 @@ def calculate_brain_score(player, current_mark_scores, current_line_scores):
         score += (player.get("差", 0) + player.get("マ", 0)) * 0.8
     return round(score, 2)
 
-def get_p_str(car, players):
-    for p in players:
-        if p["車番"] == car:
-            l_num = p.get("ライン情報", {}).get("ライン番号")
-            return f"{car}(L{l_num})" if l_num is not None else f"{car}(単)"
-    return str(car)
-
+# ★ 買い目生成：純粋な車番表記（1 - 2 - 3）に変更
 def generate_bets(players, max_2t_points, max_3t_points):
     sorted_players = sorted(players, key=lambda x: x["AIスコア"], reverse=True)
     if len(sorted_players) < 3: return {"単勝": [], "2連単": [], "3連単": []}
@@ -212,26 +205,26 @@ def generate_bets(players, max_2t_points, max_3t_points):
     p6 = sorted_players[5]["車番"] if len(sorted_players) > 5 else p5
     
     nitantan = [
-        f"{get_p_str(p1, players)} - {get_p_str(p2, players)}", f"{get_p_str(p1, players)} - {get_p_str(p3, players)}",
-        f"{get_p_str(p2, players)} - {get_p_str(p1, players)}", f"{get_p_str(p1, players)} - {get_p_str(p4, players)}",
-        f"{get_p_str(p2, players)} - {get_p_str(p3, players)}", f"{get_p_str(p3, players)} - {get_p_str(p1, players)}"
+        f"{p1} - {p2}", f"{p1} - {p3}",
+        f"{p2} - {p1}", f"{p1} - {p4}",
+        f"{p2} - {p3}", f"{p3} - {p1}"
     ]
     
     santantan = [
-        f"{get_p_str(p1, players)} - {get_p_str(p2, players)} - {get_p_str(p3, players)}", 
-        f"{get_p_str(p1, players)} - {get_p_str(p2, players)} - {get_p_str(p4, players)}",
-        f"{get_p_str(p1, players)} - {get_p_str(p3, players)} - {get_p_str(p2, players)}",
-        f"{get_p_str(p1, players)} - {get_p_str(p3, players)} - {get_p_str(p4, players)}",
-        f"{get_p_str(p2, players)} - {get_p_str(p1, players)} - {get_p_str(p3, players)}",
-        f"{get_p_str(p2, players)} - {get_p_str(p1, players)} - {get_p_str(p4, players)}",
-        f"{get_p_str(p1, players)} - {get_p_str(p4, players)} - {get_p_str(p2, players)}",
-        f"{get_p_str(p1, players)} - {get_p_str(p4, players)} - {get_p_str(p3, players)}",
-        f"{get_p_str(p1, players)} - {get_p_str(p2, players)} - {get_p_str(p5, players)}",
-        f"{get_p_str(p1, players)} - {get_p_str(p3, players)} - {get_p_str(p5, players)}",
-        f"{get_p_str(p2, players)} - {get_p_str(p3, players)} - {get_p_str(p1, players)}",
-        f"{get_p_str(p1, players)} - {get_p_str(p5, players)} - {get_p_str(p2, players)}"
+        f"{p1} - {p2} - {p3}", 
+        f"{p1} - {p2} - {p4}",
+        f"{p1} - {p3} - {p2}",
+        f"{p1} - {p3} - {p4}",
+        f"{p2} - {p1} - {p3}",
+        f"{p2} - {p1} - {p4}",
+        f"{p1} - {p4} - {p2}",
+        f"{p1} - {p4} - {p3}",
+        f"{p1} - {p2} - {p5}",
+        f"{p1} - {p3} - {p5}",
+        f"{p2} - {p3} - {p1}",
+        f"{p1} - {p5} - {p2}"
     ]
-    return {"単勝": [f"{get_p_str(p1, players)}"], "2連単": nitantan[:max_2t_points], "3連単": santantan[:max_3t_points]}
+    return {"単勝": [f"{p1}"], "2連単": nitantan[:max_2t_points], "3連単": santantan[:max_3t_points]}
 # --- ここから Part 2 ---
 
 st.set_page_config(page_title="バトルバンク君 - 競輪AI予想", page_icon="🚴‍♂️")
@@ -269,7 +262,7 @@ with tab1:
                     st.markdown("### 🎯 バトルバンク君の買い目")
                     st.markdown("#### 🥇 【単勝】"); st.code(bets["単勝"][0])
                     st.markdown(f"#### 🥈 【2連単 ({len(bets['2連単'])}点)】")
-                    for b in bets["2連単"]: st.code(b)
+                    for b in bets["2连単" if "2连単" in bets else "2連単"]: st.code(b)
                     st.markdown(f"#### 🥉 【3連単 ({len(bets['3連単'])}点)】")
                     for b in bets["3連単"]: st.code(b)
                 except Exception as e: st.error(f"エラーが発生しました: {e}")
