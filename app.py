@@ -4,6 +4,7 @@ import os
 import datetime
 import google.generativeai as genai
 from PIL import Image
+from collections import Counter
 
 # --- AIの目の準備 ---
 if "GEMINI_API_KEY" in st.secrets:
@@ -15,14 +16,17 @@ if "GEMINI_API_KEY" in st.secrets:
 DATA_FILE = "learning_history.json"
 PENDING_FILE = "pending_races.json"
 SCORE_FILE = "mark_scores.json"
+LINE_SCORE_FILE = "line_scores.json"
 
-# 初期状態の印スコア
 DEFAULT_MARK_SCORES = {
     "◎": 10.0, "◯": 8.0, "△": 6.0, "✕": 4.0, "×": 4.0,
     "⑳": 0.0, "●": 0.0, "▲": 0.0, "✖": 0.0, "☆": 0.0, "T": 0.0, "": 0.0
 }
 
-# --- データ保存・読み込み機能 ---
+DEFAULT_LINE_SCORES = {
+    "1": 5.0, "2": 3.0, "3": 2.0, "4": 1.0, "5": 0.0
+}
+
 def load_json(file_path, default_val):
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
@@ -38,51 +42,74 @@ def save_pending_race(race_data):
     pending.append(race_data)
     save_json(PENDING_FILE, pending)
 
-def update_mark_scores_and_get_line_result(actual_result_str, race_players):
-    """実際の着順から印のスコアを増減させ、決着ラインの文字列を生成する"""
+def get_payout_category(payout):
+    """払戻金から配当帯ゾーンを判定"""
+    if payout <= 4900:
+        return "4,900円以下（堅実）"
+    elif 5000 <= payout <= 9900:
+        return "5,000円〜9,900円（中配）"
+    elif 10000 <= payout <= 49000:
+        return "10,000円〜49,000円（万車）"
+    else:
+        return "50,000円以上（大穴）"
+
+def update_scores_and_get_details(actual_result_str, race_players):
+    """着順情報、印、車番、ラインの決着詳細を取得しスコアを更新"""
     try:
         places = [int(x.strip()) for x in actual_result_str.replace("ー", "-").split("-")]
     except:
-        return "入力エラー"
+        return "入力エラー", []
 
-    scores = load_json(SCORE_FILE, DEFAULT_MARK_SCORES)
-    rewards = {0: 1.0, 1: 0.5, 2: 0.2} # 1着:+1.0, 2着:+0.5, 3着:+0.2
+    mark_scores = load_json(SCORE_FILE, DEFAULT_MARK_SCORES)
+    line_scores = load_json(LINE_SCORE_FILE, DEFAULT_LINE_SCORES)
+    rewards = {0: 1.0, 1: 0.5, 2: 0.2}
+    
     line_result = []
+    place_details = [] # 着順ごとの詳細情報（車番・印・ライン位置）
 
     for i, car_num in enumerate(places):
         for p in race_players:
             if p["車番"] == car_num:
-                # ライン結果の記録（単騎の場合は L番号 なし）
                 l_num = p.get("ライン情報", {}).get("ライン番号")
                 pos = p.get("ライン情報", {}).get("ポジション", "")
-                if l_num is not None:
-                    line_result.append(f"L{l_num}({pos})")
-                else:
-                    line_result.append("単騎")
-                
-                # 印スコアの加算
                 mark = p.get("基本印", "")
-                if mark in scores:
-                    scores[mark] += rewards.get(i, 0.0)
+                
+                line_str = f"L{l_num}({pos})" if l_num is not None else "単騎"
+                line_result.append(line_str)
+                
+                place_details.append({
+                    "着順": i + 1,
+                    "車番": car_num,
+                    "印": mark if mark else "印なし",
+                    "ライン情報": line_str
+                })
+                
+                # スコア加算
+                if l_num is not None and str(l_num) in line_scores:
+                    line_scores[str(l_num)] += rewards.get(i, 0.0)
+                if mark in mark_scores:
+                    mark_scores[mark] += rewards.get(i, 0.0)
 
-    # 着外の印からは少しだけ減点(-0.1)してバランスを取る
+    # 着外の微減
     for p in race_players:
         if p["車番"] not in places:
             mark = p.get("基本印", "")
-            if mark in scores:
-                scores[mark] -= 0.1
-                
-    # 小数点第2位までに丸める
-    for k in scores:
-        scores[k] = round(scores[k], 2)
+            if mark in mark_scores: mark_scores[mark] -= 0.1
+            l_num = p.get("ライン情報", {}).get("ライン番号")
+            if l_num is not None and str(l_num) in line_scores:
+                line_scores[str(l_num)] -= 0.1
+
+    for k in mark_scores: mark_scores[k] = round(mark_scores[k], 2)
+    for k in line_scores: line_scores[k] = round(line_scores[k], 2)
         
-    save_json(SCORE_FILE, scores)
-    return " - ".join(line_result)
+    save_json(SCORE_FILE, mark_scores)
+    save_json(LINE_SCORE_FILE, line_scores)
+    return " - ".join(line_result), place_details
 
 def extract_data_from_image(image):
     model = genai.GenerativeModel('gemini-flash-latest')
     prompt = """
-    This is a Keirin (cycling) race card. Extract player data and line predictions into JSON format.
+    This is a Keirin race card. Extract player data and line predictions into JSON format.
     Output ONLY valid JSON matching this exact schema:
     {
       "選手": [
@@ -99,7 +126,6 @@ def extract_data_from_image(image):
     return json.loads(json_text)
 
 def apply_custom_marks(data):
-    """単騎はライン番号に含めず分離してマスターのカスタム印を適用"""
     players = data.get("選手", [])
     lines = data.get("並び予想", [])
     
@@ -107,7 +133,6 @@ def apply_custom_marks(data):
     original_marks = {p["車番"]: p.get("基本印", "") for p in players}
     used_special_marks = set()
     
-    # デフォルトは単騎設定
     for p in players:
         p["ライン情報"] = {"ライン番号": None, "ポジション": "単騎"}
 
@@ -117,36 +142,24 @@ def apply_custom_marks(data):
             real_line_count += 1
             for i in range(len(line)):
                 current_car = line[i]
-                if current_car not in player_dict:
-                    continue
-                    
+                if current_car not in player_dict: continue
                 curr_p = player_dict[current_car]
                 pos_name = "先頭" if i == 0 else ("番手" if i == 1 else f"{i+1}番手")
                 curr_p["ライン情報"] = {"ライン番号": real_line_count, "ポジション": pos_name}
                 
                 if original_marks[current_car] == "":
                     neighbor_marks = []
-                    if i > 0:
-                        prev_car = line[i-1]
-                        if prev_car in original_marks:
-                            neighbor_marks.append(original_marks[prev_car])
-                    if i < len(line) - 1:
-                        next_car = line[i+1]
-                        if next_car in original_marks:
-                            neighbor_marks.append(original_marks[next_car])
+                    if i > 0 and line[i-1] in original_marks: neighbor_marks.append(original_marks[line[i-1]])
+                    if i < len(line) - 1 and line[i+1] in original_marks: neighbor_marks.append(original_marks[line[i+1]])
                             
                     if "◎" in neighbor_marks and "⑳" not in used_special_marks:
-                        curr_p["基本印"] = "⑳"
-                        used_special_marks.add("⑳")
+                        curr_p["基本印"] = "⑳"; used_special_marks.add("⑳")
                     elif "◯" in neighbor_marks and "●" not in used_special_marks:
-                        curr_p["基本印"] = "●"
-                        used_special_marks.add("●")
+                        curr_p["基本印"] = "●"; used_special_marks.add("●")
                     elif "△" in neighbor_marks and "▲" not in used_special_marks:
-                        curr_p["基本印"] = "▲"
-                        used_special_marks.add("▲")
+                        curr_p["基本印"] = "▲"; used_special_marks.add("▲")
                     elif ("✕" in neighbor_marks or "×" in neighbor_marks) and "✖" not in used_special_marks:
-                        curr_p["基本印"] = "✖"
-                        used_special_marks.add("✖")
+                        curr_p["基本印"] = "✖"; used_special_marks.add("✖")
                     else:
                         curr_p["基本印"] = "☆"
         elif len(line) == 1:
@@ -154,25 +167,24 @@ def apply_custom_marks(data):
             if current_car in player_dict:
                 curr_p = player_dict[current_car]
                 curr_p["ライン情報"] = {"ライン番号": None, "ポジション": "単騎"}
-                if original_marks[current_car] == "":
-                    curr_p["基本印"] = "T"
+                if original_marks[current_car] == "": curr_p["基本印"] = "T"
 
     for curr_p in player_dict.values():
         if curr_p.get("基本印", "") == "":
-            if curr_p["ライン情報"]["ポジション"] == "単騎":
-                curr_p["基本印"] = "T"
-            else:
-                curr_p["基本印"] = "☆"
+            curr_p["基本印"] = "T" if curr_p["ライン情報"]["ポジション"] == "単騎" else "☆"
             
     return list(player_dict.values()), lines
 
-def calculate_brain_score(player, current_scores):
+def calculate_brain_score(player, current_mark_scores, current_line_scores):
     score = player.get("競走得点", 0.0)
     mark = player.get("基本印", "")
+    score += current_mark_scores.get(mark, 0.0)
     
-    score += current_scores.get(mark, 0.0)
+    l_num = player.get("ライン情報", {}).get("ライン番号")
+    if l_num is not None:
+        score += current_line_scores.get(str(l_num), 0.0)
+    
     score += (player.get("H", 0) + player.get("B", 0)) * 0.5 
-    
     role = player.get("ライン情報", {}).get("ポジション", "不明")
     if role == "先頭" or role == "単騎":
         score += (player.get("逃", 0) + player.get("捲", 0)) * 0.8
@@ -181,20 +193,15 @@ def calculate_brain_score(player, current_scores):
     return round(score, 2)
 
 def get_p_str(car, players):
-    """車番にライン情報を付けて表示する（例: 1(L1), 5(単) ）"""
     for p in players:
         if p["車番"] == car:
             l_num = p.get("ライン情報", {}).get("ライン番号")
-            if l_num is not None:
-                return f"{car}(L{l_num})"
-            else:
-                return f"{car}(単)"
+            return f"{car}(L{l_num})" if l_num is not None else f"{car}(単)"
     return str(car)
 
 def generate_bets(players, max_2t_points, max_3t_points):
     sorted_players = sorted(players, key=lambda x: x["AIスコア"], reverse=True)
-    if len(sorted_players) < 3:
-        return {"単勝": [], "2連単": [], "3連単": []}
+    if len(sorted_players) < 3: return {"単勝": [], "2連単": [], "3連単": []}
     
     p1, p2, p3 = sorted_players[0]["車番"], sorted_players[1]["車番"], sorted_players[2]["車番"]
     p4 = sorted_players[3]["車番"] if len(sorted_players) > 3 else p3
@@ -221,26 +228,19 @@ def generate_bets(players, max_2t_points, max_3t_points):
         f"{get_p_str(p2, players)} - {get_p_str(p3, players)} - {get_p_str(p1, players)}",
         f"{get_p_str(p1, players)} - {get_p_str(p5, players)} - {get_p_str(p2, players)}"
     ]
-    
-    return {
-        "単勝": [f"{get_p_str(p1, players)}"],
-        "2連単": nitantan[:max_2t_points],
-        "3連単": santantan[:max_3t_points]
-    }
+    return {"単勝": [f"{get_p_str(p1, players)}"], "2連単": nitantan[:max_2t_points], "3連単": santantan[:max_3t_points]}
 
 # --- UI画面 ---
 st.set_page_config(page_title="バトルバンク君 - 競輪AI予想", page_icon="🚴‍♂️")
 st.title("🤖 バトルバンク君")
-st.markdown("進化版：過去の履歴削除ボタン機能を追加！")
+st.markdown("超進化版：配当帯ごとの印・車番・ライン傾向のデータ分析に対応！")
 
-tab1, tab2, tab3 = st.tabs(["🎯 解析と予想", "📚 結果の学習（ストック）", "📊 収支・データ分析"])
+tab1, tab2, tab3 = st.tabs(["🎯 解析と予想", "📚 結果の学習（ストック）", "📊 収支・配当帯データ分析"])
 
 with tab1:
     col_s1, col_s2 = st.columns(2)
-    with col_s1:
-        max_2t_points = st.slider("2連単の点数", 2, 6, 4)
-    with col_s2:
-        max_3t_points = st.slider("3連単の点数", 6, 25, 12, step=1)
+    with col_s1: max_2t_points = st.slider("2連単の点数", 2, 6, 4)
+    with col_s2: max_3t_points = st.slider("3連単の点数", 6, 25, 12, step=1)
 
     input_mode = st.radio("入力方法を選んでください", ["📷 画像からAI自動読み取り", "✍️ 手動でデータを入力（API消費ゼロ）"])
 
@@ -254,27 +254,22 @@ with tab1:
                     raw_data = extract_data_from_image(image)
                     players, lines = apply_custom_marks(raw_data)
                     
-                    current_scores = load_json(SCORE_FILE, DEFAULT_MARK_SCORES)
-                    for p in players:
-                        p["AIスコア"] = calculate_brain_score(p, current_scores)
+                    current_mark_scores = load_json(SCORE_FILE, DEFAULT_MARK_SCORES)
+                    current_line_scores = load_json(LINE_SCORE_FILE, DEFAULT_LINE_SCORES)
+                    for p in players: p["AIスコア"] = calculate_brain_score(p, current_mark_scores, current_line_scores)
                         
                     bets = generate_bets(players, max_2t_points, max_3t_points)
                     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    save_pending_race({
-                        "id": str(datetime.datetime.now().timestamp()),
-                        "date": now_str, "データ": players, "並び予想": lines, "予測": bets
-                    })
+                    save_pending_race({"id": str(datetime.datetime.now().timestamp()), "date": now_str, "データ": players, "並び予想": lines, "予測": bets})
                     st.success("解析完了！結果待ちリストにストックしました。")
                     
-                    st.markdown("### 🎯 バトルバンク君の買い目 (L1=ライン1, 単=単騎)")
-                    st.markdown("#### 🥇 【単勝】")
-                    for b in bets["単勝"]: st.code(b)
+                    st.markdown("### 🎯 バトルバンク君の買い目")
+                    st.markdown("#### 🥇 【単勝】"); st.code(bets["単勝"][0])
                     st.markdown(f"#### 🥈 【2連単 ({len(bets['2連単'])}点)】")
                     for b in bets["2連単"]: st.code(b)
                     st.markdown(f"#### 🥉 【3連単 ({len(bets['3連単'])}点)】")
                     for b in bets["3連単"]: st.code(b)
-                except Exception as e:
-                    st.error(f"エラーが発生しました: {e}")
+                except Exception as e: st.error(f"エラーが発生しました: {e}")
 
     else:
         st.subheader("✍️ 手動データ入力モード")
@@ -294,18 +289,14 @@ with tab1:
                     m_roll = st.number_input(f"捲", 0, 50, 0, key=f"m_roll_{c}")
                     m_diff = st.number_input(f"差", 0, 50, 0, key=f"m_diff_{c}")
                     m_ma = st.number_input(f"マ", 0, 50, 0, key=f"m_ma_{c}")
-                manual_players.append({
-                    "車番": c, "選手名": m_name, "競走得点": m_score, "基本印": m_mark,
-                    "H": m_h, "B": m_b, "逃": m_run, "捲": m_roll, "差": m_diff, "マ": m_ma
-                })
+                manual_players.append({"車番": c, "選手名": m_name, "競走得点": m_score, "基本印": m_mark, "H": m_h, "B": m_b, "逃": m_run, "捲": m_roll, "差": m_diff, "マ": m_ma})
         
         st.markdown("#### 並び予想（ライン）の入力")
-        st.caption("※2車以上のラインのみ入力してください。ラインに入力しなかった車番は自動的に「単騎」扱いになります。")
-        line_str_1 = st.text_input("ライン1（例: 1,7,2）", value="1, 7, 2")
-        line_str_2 = st.text_input("ライン2（例: 4,3,6）", value="4, 3, 6")
-        line_str_3 = st.text_input("ライン3（任意）", value="")
-        line_str_4 = st.text_input("ライン4（任意）", value="")
-        line_str_5 = st.text_input("ライン5（任意）", value="")
+        line_str_1 = st.text_input("ライン1 (例: 1,7,2)", value="1, 7, 2")
+        line_str_2 = st.text_input("ライン2 (例: 4,3,6)", value="4, 3, 6")
+        line_str_3 = st.text_input("ライン3 (任意)", value="")
+        line_str_4 = st.text_input("ライン4 (任意)", value="")
+        line_str_5 = st.text_input("ライン5 (任意)", value="")
         
         if st.button("✍️ 手動データを解析・ストックする"):
             try:
@@ -318,24 +309,20 @@ with tab1:
                 raw_data = {"選手": manual_players, "並び予想": lines}
                 players, lines = apply_custom_marks(raw_data)
                 
-                current_scores = load_json(SCORE_FILE, DEFAULT_MARK_SCORES)
-                for p in players:
-                    p["AIスコア"] = calculate_brain_score(p, current_scores)
+                current_mark_scores = load_json(SCORE_FILE, DEFAULT_MARK_SCORES)
+                current_line_scores = load_json(LINE_SCORE_FILE, DEFAULT_LINE_SCORES)
+                for p in players: p["AIスコア"] = calculate_brain_score(p, current_mark_scores, current_line_scores)
                     
                 bets = generate_bets(players, max_2t_points, max_3t_points)
                 now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                save_pending_race({
-                    "id": str(datetime.datetime.now().timestamp()),
-                    "date": now_str, "データ": players, "並び予想": lines, "予測": bets
-                })
+                save_pending_race({"id": str(datetime.datetime.now().timestamp()), "date": now_str, "データ": players, "並び予想": lines, "予測": bets})
                 st.success("手動データの解析完了！ストックしました。")
                 
-                st.markdown("### 🎯 バトルバンク君の買い目 (L1=ライン1, 単=単騎)")
-                for b in bets["単勝"]: st.code(b)
+                st.markdown("### 🎯 バトルバンク君の買い目")
+                st.code(bets["単勝"][0])
                 for b in bets["2連単"]: st.code(b)
                 for b in bets["3連単"]: st.code(b)
-            except Exception as e:
-                st.error(f"入力エラー: {e}")
+            except Exception as e: st.error(f"入力エラー: {e}")
 
 with tab2:
     st.subheader("📝 結果待ちのレース一覧")
@@ -352,23 +339,24 @@ with tab2:
                 
                 actual_result = st.text_input("実際の着順（例: 1-2-3）", key=f"res_{race['id']}")
                 col_i1, col_i2 = st.columns(2)
-                with col_i1:
-                    investment = st.number_input("投資金額 (円)", min_value=0, value=1000, step=100, key=f"inv_{race['id']}")
-                with col_i2:
-                    payout = st.number_input("払戻金額 (円)", min_value=0, value=0, step=100, key=f"pay_{race['id']}")
+                with col_i1: investment = st.number_input("投資金額 (円)", min_value=0, value=1000, step=100, key=f"inv_{race['id']}")
+                with col_i2: payout = st.number_input("払戻金額 (円)", min_value=0, value=0, step=100, key=f"pay_{race['id']}")
                 memo = st.text_area("レースメモ", key=f"memo_{race['id']}")
                 
                 col_btn1, col_btn2 = st.columns(2)
                 with col_btn1:
-                    if st.button("学習させる（印スコア自動更新）", key=f"btn_{race['id']}"):
+                    if st.button("学習させる（配当帯＆スコア自動分類）", key=f"btn_{race['id']}"):
                         if actual_result:
-                            line_str = update_mark_scores_and_get_line_result(actual_result, race['データ'])
+                            line_str, place_details = update_scores_and_get_details(actual_result, race['データ'])
+                            category = get_payout_category(payout)
                             
                             history = load_json(DATA_FILE, [])
                             history.append({
                                 "date": race['date'],
                                 "実際の着順": actual_result,
+                                "配当帯ゾーン": category,
                                 "決着ライン": line_str,
+                                "着順詳細": place_details,
                                 "投資額": investment, "払戻額": payout, "収支": payout - investment,
                                 "メモ": memo
                             })
@@ -376,10 +364,9 @@ with tab2:
                             
                             pending_races.pop(i)
                             save_json(PENDING_FILE, pending_races)
-                            st.success(f"決着ライン【{line_str}】として学習しました！印のスコアも進化しました！")
+                            st.success(f"配当帯【{category}】・決着【{line_str}】として学習しました！")
                             st.rerun()
-                        else:
-                            st.warning("着順を入力してください！")
+                        else: st.warning("着順を入力してください！")
                 with col_btn2:
                     if st.button("🗑️ 削除", key=f"del_{race['id']}"):
                         pending_races.pop(i)
@@ -387,43 +374,69 @@ with tab2:
                         st.rerun()
 
 with tab3:
-    st.subheader("🧠 現在の印スコア（AI自己学習済み）")
-    current_scores = load_json(SCORE_FILE, DEFAULT_MARK_SCORES)
-    st.json(current_scores)
-    
-    st.markdown("---")
-    st.subheader("📊 収支・データ分析")
+    st.subheader("📊 配当帯別データ・アナリティクス")
     history_data = load_json(DATA_FILE, [])
     
     if not history_data:
-        st.info("データがありません。")
+        st.info("まだ学習データがありません。「結果の学習」からレース結果と払戻金を入力してください！")
     else:
-        total_inv = sum(h.get("投資額", 0) for h in history_data)
-        total_pay = sum(h.get("払戻額", 0) for h in history_data)
-        total_profit = total_pay - total_inv
-        recovery_rate = (total_pay / total_inv * 100) if total_inv > 0 else 0
+        # 配当帯フィルター選択
+        zone_options = ["すべて", "4,900円以下（堅実）", "5,000円〜9,900円（中配）", "10,000円〜49,000円（万車）", "50,000円以上（大穴）"]
+        selected_zone = st.selectbox("🎯 分析したい配当帯（オッズ）ゾーンを選んでください", zone_options)
         
-        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-        col_m1.metric("総投資額", f"{total_inv:,} 円")
-        col_m2.metric("総払戻額", f"{total_pay:,} 円")
-        col_m3.metric("総収支", f"{total_profit:+,} 円")
-        col_m4.metric("回収率", f"{recovery_rate:.1f}%")
+        filtered_data = history_data if selected_zone == "すべて" else [h for h in history_data if h.get("配当帯ゾーン") == selected_zone]
         
+        st.markdown(f"### 📈 【{selected_zone}】の傾向と学習データ ({len(filtered_data)}件)")
+        
+        if not filtered_data:
+            st.warning("この配当帯のデータはまだありません。")
+        else:
+            # 配当帯ごとの統計処理
+            all_marks = []
+            all_cars = []
+            all_lines = []
+            
+            for h in filtered_data:
+                for detail in h.get("着順詳細", []):
+                    all_marks.append(detail.get("印", "印なし"))
+                    all_cars.append(f"{detail.get('車番')}番車")
+                    all_lines.append(detail.get("ライン情報", "不明"))
+            
+            mark_counts = Counter(all_marks).most_common(5)
+            car_counts = Counter(all_cars).most_common(5)
+            line_counts = Counter(all_lines).most_common(5)
+            
+            col_a1, col_a2, col_a3 = st.columns(3)
+            
+            with col_a1:
+                st.markdown("#### 🎯 来やすい【印】")
+                for mark, cnt in mark_counts:
+                    st.write(f"- **{mark}**: {cnt}回")
+                    
+            with col_a2:
+                st.markdown("#### 🚲 来やすい【車番】")
+                for car, cnt in car_counts:
+                    st.write(f"- **{car}**: {cnt}回")
+                    
+            with col_a3:
+                st.markdown("#### 🚩 来やすい【ライン位置】")
+                for line, cnt in line_counts:
+                    st.write(f"- **{line}**: {cnt}回")
+
+        st.markdown("---")
+        st.subheader("🧠 現在の学習済みAIスコア")
+        col_sc1, col_sc2 = st.columns(2)
+        with col_sc1:
+            st.markdown("#### 1. 印のスコア")
+            st.json(load_json(SCORE_FILE, DEFAULT_MARK_SCORES))
+        with col_sc2:
+            st.markdown("#### 2. ライン番号のスコア (1〜5)")
+            st.json(load_json(LINE_SCORE_FILE, DEFAULT_LINE_SCORES))
+            
         st.markdown("---")
         st.subheader("📝 過去のレース履歴")
-        # ★ インデックス付きループで各履歴に削除ボタンを設置
         for idx, h in enumerate(history_data):
             profit_str = f"{h.get('収支', 0):+,} 円"
+            zone = h.get('配当帯ゾーン', '未分類')
             line_result = h.get('決着ライン', '不明')
-            with st.expander(f"📅 {h['date']} | 結果: {h.get('実際の着順', '不明')} ({line_result}) | 収支: {profit_str}"):
-                st.write(f"**投資**: {h.get('投資額', 0):,}円 / **払戻**: {h.get('払戻額', 0):,}円")
-                st.write(f"**決着ライン**: {line_result}")
-                if h.get("メモ"):
-                    st.write(f"**メモ**: {h.get('メモ')}")
-                
-                # ★ 過去履歴の削除ボタン
-                if st.button("🗑️ この履歴を削除する", key=f"del_hist_{idx}_{h.get('date', '')}"):
-                    history_data.pop(idx)
-                    save_json(DATA_FILE, history_data)
-                    st.success("指定したレース履歴を削除しました！")
-                    st.rerun()
+            with st.expan
