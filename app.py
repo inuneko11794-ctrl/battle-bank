@@ -231,7 +231,7 @@ def generate_bets(players, max_2t_points, max_3t_points):
 # --- UI画面 ---
 st.set_page_config(page_title="バトルバンク君 - 競輪AI予想", page_icon="🚴‍♂️")
 st.title("🤖 バトルバンク君")
-st.markdown("進化版：学習で「印スコア」が自動成長＆単騎を正しく分離表示！")
+st.markdown("進化版：過去の履歴削除ボタン機能を追加！")
 
 tab1, tab2, tab3 = st.tabs(["🎯 解析と予想", "📚 結果の学習（ストック）", "📊 収支・データ分析"])
 
@@ -411,10 +411,19 @@ with tab3:
         
         st.markdown("---")
         st.subheader("📝 過去のレース履歴")
-        for h in history_data:
+        # ★ インデックス付きループで各履歴に削除ボタンを設置
+        for idx, h in enumerate(history_data):
             profit_str = f"{h.get('収支', 0):+,} 円"
             line_result = h.get('決着ライン', '不明')
             with st.expander(f"📅 {h['date']} | 結果: {h.get('実際の着順', '不明')} ({line_result}) | 収支: {profit_str}"):
                 st.write(f"**投資**: {h.get('投資額', 0):,}円 / **払戻**: {h.get('払戻額', 0):,}円")
                 st.write(f"**決着ライン**: {line_result}")
-                if h.get("メモ"): st.write(f"**メモ**: {h.get('メモ')}")
+                if h.get("メモ"):
+                    st.write(f"**メモ**: {h.get('メモ')}")
+                
+                # ★ 過去履歴の削除ボタン
+                if st.button("🗑️ この履歴を削除する", key=f"del_hist_{idx}_{h.get('date', '')}"):
+                    history_data.pop(idx)
+                    save_json(DATA_FILE, history_data)
+                    st.success("指定したレース履歴を削除しました！")
+                    st.rerun()
