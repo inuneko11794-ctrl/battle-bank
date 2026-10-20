@@ -245,7 +245,7 @@ def generate_bets(players, max_2t_points, max_3t_points):
 
 st.set_page_config(page_title="バトルバンク君 - 競輪AI予想", page_icon="🚴‍♂️")
 st.title("🤖 バトルバンク君")
-st.markdown("超進化版：期間絞り込み＆AIスコア成長度メーター機能対応！")
+st.markdown("超進化版：5〜9車立て対応＆期間絞り込み＆AIスコア成長度メーター機能！")
 
 tab1, tab2, tab3 = st.tabs(["🎯 解析と予想", "📚 結果の学習（ストック）", "📊 期間・配当＆展開データ分析"])
 
@@ -285,7 +285,8 @@ with tab1:
 
     else:
         st.subheader("✍️ 手動データ入力モード")
-        num_players = st.number_input("出走人数（7車 or 9車）", min_value=7, max_value=9, value=7)
+        # ★ ここを 5〜9車 まで入力できるように変更！
+        num_players = st.number_input("出走人数（5〜9車）", min_value=5, max_value=9, value=7)
         manual_players = []
         for c in range(1, int(num_players) + 1):
             with st.expander(f"車番 {c} の選手"):
