@@ -323,6 +323,7 @@ with tab1:
                 for b in bets["2連単"]: st.code(b)
                 for b in bets["3連単"]: st.code(b)
             except Exception as e: st.error(f"入力エラー: {e}")
+# --- ここから後半（Part 2） ---
 
 with tab2:
     st.subheader("📝 結果待ちのレース一覧")
@@ -439,4 +440,12 @@ with tab3:
             profit_str = f"{h.get('収支', 0):+,} 円"
             zone = h.get('配当帯ゾーン', '未分類')
             line_result = h.get('決着ライン', '不明')
-            with st.expan
+            with st.expander(f"📅 {h['date']} | 【{zone}】 | 収支: {profit_str}"):
+                st.write(f"**払戻金**: {h.get('払戻額', 0):,}円 (投資: {h.get('投資額', 0):,}円)")
+                st.write(f"**決着ライン**: {line_result}")
+                if h.get("メモ"): st.write(f"**メモ**: {h.get('メモ')}")
+                if st.button("🗑️ この履歴を削除する", key=f"del_hist_{idx}_{h.get('date', '')}"):
+                    history_data.pop(idx)
+                    save_json(DATA_FILE, history_data)
+                    st.success("削除しました！")
+                    st.rerun()
