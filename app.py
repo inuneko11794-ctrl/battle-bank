@@ -233,8 +233,110 @@ def generate_bets(players, max_2t_points, max_3t_points):
         f"{get_p_str(p1, players)} - {get_p_str(p3, players)} - {get_p_str(p4, players)}",
         f"{get_p_str(p2, players)} - {get_p_str(p1, players)} - {get_p_str(p3, players)}",
         f"{get_p_str(p2, players)} - {get_p_str(p1, players)} - {get_p_str(p4, players)}",
-        f"{get
-# --- ここから後半（Part 2） ---
+        f"{get_p_str(p1, players)} - {get_p_str(p4, players)} - {get_p_str(p2, players)}",
+        f"{get_p_str(p1, players)} - {get_p_str(p4, players)} - {get_p_str(p3, players)}",
+        f"{get_p_str(p1, players)} - {get_p_str(p2, players)} - {get_p_str(p5, players)}",
+        f"{get_p_str(p1, players)} - {get_p_str(p3, players)} - {get_p_str(p5, players)}",
+        f"{get_p_str(p2, players)} - {get_p_str(p3, players)} - {get_p_str(p1, players)}",
+        f"{get_p_str(p1, players)} - {get_p_str(p5, players)} - {get_p_str(p2, players)}"
+    ]
+    return {"単勝": [f"{get_p_str(p1, players)}"], "2連単": nitantan[:max_2t_points], "3連単": santantan[:max_3t_points]}
+# --- ここから Part 2 ---
+
+st.set_page_config(page_title="バトルバンク君 - 競輪AI予想", page_icon="🚴‍♂️")
+st.title("🤖 バトルバンク君")
+st.markdown("超進化版：期間絞り込み＆AIスコア成長度メーター機能対応！")
+
+tab1, tab2, tab3 = st.tabs(["🎯 解析と予想", "📚 結果の学習（ストック）", "📊 期間・配当＆展開データ分析"])
+
+with tab1:
+    col_s1, col_s2 = st.columns(2)
+    with col_s1: max_2t_points = st.slider("2連単の点数", 2, 6, 4)
+    with col_s2: max_3t_points = st.slider("3連単の点数", 6, 25, 12, step=1)
+
+    input_mode = st.radio("入力方法を選んでください", ["📷 画像からAI自動読み取り", "✍️ 手動でデータを入力（API消費ゼロ）"])
+
+    if input_mode == "📷 画像からAI自動読み取り":
+        uploaded_file = st.file_uploader("出走表をアップロード", type=["png", "jpg", "jpeg"])
+        if uploaded_file is not None:
+            image = Image.open(uploaded_file)
+            st.image(image, caption="解析中...", use_column_width=True)
+            with st.spinner("バトルバンク君が画像を解析しています..."):
+                try:
+                    raw_data = extract_data_from_image(image)
+                    players, lines = apply_custom_marks(raw_data)
+                    
+                    current_mark_scores = load_json(SCORE_FILE, DEFAULT_MARK_SCORES)
+                    current_line_scores = load_json(LINE_SCORE_FILE, DEFAULT_LINE_SCORES)
+                    for p in players: p["AIスコア"] = calculate_brain_score(p, current_mark_scores, current_line_scores)
+                        
+                    bets = generate_bets(players, max_2t_points, max_3t_points)
+                    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    save_pending_race({"id": str(datetime.datetime.now().timestamp()), "date": now_str, "データ": players, "並び予想": lines, "予測": bets})
+                    st.success("解析完了！結果待ちリストにストックしました。")
+                    
+                    st.markdown("### 🎯 バトルバンク君の買い目")
+                    st.markdown("#### 🥇 【単勝】"); st.code(bets["単勝"][0])
+                    st.markdown(f"#### 🥈 【2連単 ({len(bets['2連単'])}点)】")
+                    for b in bets["2連単"]: st.code(b)
+                    st.markdown(f"#### 🥉 【3連単 ({len(bets['3連単'])}点)】")
+                    for b in bets["3連単"]: st.code(b)
+                except Exception as e: st.error(f"エラーが発生しました: {e}")
+
+    else:
+        st.subheader("✍️ 手動データ入力モード")
+        num_players = st.number_input("出走人数（7車 or 9車）", min_value=7, max_value=9, value=7)
+        manual_players = []
+        for c in range(1, int(num_players) + 1):
+            with st.expander(f"車番 {c} の選手"):
+                m_name = st.text_input(f"選手名 (車番{c})", value=f"選手{c}", key=f"m_name_{c}")
+                m_score = st.number_input(f"競走得点 (車番{c})", min_value=70.0, max_value=120.0, value=90.0, step=0.01, key=f"m_score_{c}")
+                m_mark = st.selectbox(f"基本印 (車番{c})", ["", "◎", "◯", "△", "✕", "⑳", "●", "▲", "✖", "☆", "T"], key=f"m_mark_{c}")
+                m_leg = st.selectbox(f"脚質 (車番{c})", ["逃", "両", "追"], key=f"m_leg_{c}")
+                col_hb1, col_hb2 = st.columns(2)
+                with col_hb1:
+                    m_h = st.number_input(f"H回数", 0, 50, 0, key=f"m_h_{c}")
+                    m_b = st.number_input(f"B回数", 0, 50, 0, key=f"m_b_{c}")
+                with col_hb2:
+                    m_run = st.number_input(f"逃", 0, 50, 0, key=f"m_run_{c}")
+                    m_roll = st.number_input(f"捲", 0, 50, 0, key=f"m_roll_{c}")
+                    m_diff = st.number_input(f"差", 0, 50, 0, key=f"m_diff_{c}")
+                    m_ma = st.number_input(f"マ", 0, 50, 0, key=f"m_ma_{c}")
+                manual_players.append({"車番": c, "選手名": m_name, "競走得点": m_score, "基本印": m_mark, "脚質": m_leg, "H": m_h, "B": m_b, "逃": m_run, "捲": m_roll, "差": m_diff, "マ": m_ma})
+        
+        st.markdown("#### 並び予想（ライン）の入力")
+        line_str_1 = st.text_input("ライン1 (例: 1,7,2)", value="1, 7, 2")
+        line_str_2 = st.text_input("ライン2 (例: 4,3,6)", value="4, 3, 6")
+        line_str_3 = st.text_input("ライン3 (任意)", value="")
+        line_str_4 = st.text_input("ライン4 (任意)", value="")
+        line_str_5 = st.text_input("ライン5 (任意)", value="")
+        
+        if st.button("✍️ 手動データを解析・ストックする"):
+            try:
+                lines = []
+                for l_str in [line_str_1, line_str_2, line_str_3, line_str_4, line_str_5]:
+                    if l_str.strip():
+                        cars = [int(x.strip()) for x in l_str.split(",") if x.strip().isdigit()]
+                        if cars: lines.append(cars)
+                            
+                raw_data = {"選手": manual_players, "並び予想": lines}
+                players, lines = apply_custom_marks(raw_data)
+                
+                current_mark_scores = load_json(SCORE_FILE, DEFAULT_MARK_SCORES)
+                current_line_scores = load_json(LINE_SCORE_FILE, DEFAULT_LINE_SCORES)
+                for p in players: p["AIスコア"] = calculate_brain_score(p, current_mark_scores, current_line_scores)
+                    
+                bets = generate_bets(players, max_2t_points, max_3t_points)
+                now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                save_pending_race({"id": str(datetime.datetime.now().timestamp()), "date": now_str, "データ": players, "並び予想": lines, "予測": bets})
+                st.success("手動データの解析完了！ストックしました。")
+                
+                st.markdown("### 🎯 バトルバンク君の買い目")
+                st.code(bets["単勝"][0])
+                for b in bets["2連単"]: st.code(b)
+                for b in bets["3連単"]: st.code(b)
+            except Exception as e: st.error(f"入力エラー: {e}")
+# --- ここから Part 3 ---
 
 with tab2:
     st.subheader("📝 結果待ちのレース一覧")
@@ -289,7 +391,6 @@ with tab2:
 with tab3:
     st.subheader("📊 期間・配当＆展開データ・マルチアナリティクス")
     
-    # 1. 🧠 AIスコアの成長度メーター（初期値からの差分を表示）
     st.markdown("### 🧠 AIスコア成長度メーター (初期値からの変化)")
     col_sc1, col_sc2 = st.columns(2)
     current_mark_scores = load_json(SCORE_FILE, DEFAULT_MARK_SCORES)
@@ -314,7 +415,6 @@ with tab3:
 
     st.markdown("---")
     
-    # 2. 📊 データ分析・フィルター検索エリア
     history_data = load_json(DATA_FILE, [])
     
     if not history_data:
@@ -322,7 +422,6 @@ with tab3:
     else:
         st.markdown("### 🔍 分析フィルター設定")
         
-        # 📅 日付（期間）フィルター
         dates = [h['date'][:10] for h in history_data if 'date' in h]
         min_d = datetime.datetime.strptime(min(dates), "%Y-%m-%d").date() if dates else datetime.date.today()
         max_d = datetime.datetime.strptime(max(dates), "%Y-%m-%d").date() if dates else datetime.date.today()
@@ -339,7 +438,6 @@ with tab3:
             pattern_options = ["すべて", "2分戦", "3分戦", "細切れ戦", "先行一車/その他"]
             selected_pattern = st.selectbox("🏁 展開パターン", pattern_options)
         
-        # フィルター実行
         filtered_data = []
         for h in history_data:
             h_date_str = h.get('date', '')[:10]
