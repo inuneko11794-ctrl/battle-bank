@@ -148,7 +148,7 @@
             <p id="instantRadarDetail" class="text-[11px] text-slate-400 mt-1.5 leading-relaxed">並び予想と印を含むMDファイル・テキストを貼ると、変換ルールを適用して即時計算します。</p>
           </div>
           <button id="importInstantPasteBtn" type="button" disabled class="mt-3 w-full py-2 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/35 disabled:opacity-40 border border-cyan-400/50 text-cyan-200 font-bold text-xs transition">
-            ＋ この診断レースを一覧へ追加して詳細解析する
+            ＋ このレースを追加（Shift押下で全レース一括登録）
           </button>
         </div>
       </div>
@@ -707,8 +707,10 @@
           if (line.includes('並び予想')) {
             const bracketMatches = line.match(/\[[^\]]+\]/g);
             if (bracketMatches) {
-              rawFormation = bracketMatches.join(' ');
-              parsedLines = bracketMatches.map(b => b.match(/\d+/g)).filter(Boolean);
+              // 数字を含む括弧のみをラインとして採用（注記の [ ] などを除外）
+              const validBrackets = bracketMatches.filter(b => /\d/.test(b));
+              rawFormation = validBrackets.join(' ');
+              parsedLines = validBrackets.map(b => b.match(/\d+/g)).filter(Boolean);
             }
           }
           const tableMatch = line.match(/^\|\s*([1-9])\s*\|\s*([^|]+)\|\s*([^|]+)\|\s*([^|]+)\|\s*([^|]+)\|\s*([^|]+)\|\s*([^|]+)\|/);
@@ -1065,6 +1067,65 @@
     document.getElementById('randomRaceBtn').addEventListener('click', () => { currentRaceIdx = Math.floor(Math.random() * allRaces.length); renderCurrentRace(); refreshVerticalStockList(); });
     document.getElementById('calibrate70Btn').addEventListener('click', () => calibrateToMansha70(false));
     document.getElementById('trainAiBtn').addEventListener('click', () => showToast('⚡ AI学習を実行しました'));
+
+
+    // MDファイル読込ハンドラ（欠落していた部分を追加）
+    document.getElementById('instantMdFileInput').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const text = ev.target.result;
+        document.getElementById('instantPasteInput').value = text;
+        document.getElementById('instantReadStatus').textContent = `読込済: ${file.name} (${text.length}文字)`;
+        runInstantDiagnosisFromTextarea();
+        showToast(`📄 ${file.name} を読み込みました`);
+      };
+      reader.readAsText(file, 'utf-8');
+    });
+
+    // 全レース一括インポートボタン用（HTMLに後で追加するか、既存ボタンを拡張）
+    function importAllRacesFromText(text) {
+      const parsed = parseMarkdownRaces(text.startsWith('#') ? text : `# 競輪レースデータ：即席\n${text}`);
+      if (!parsed.length) {
+        showToast('⚠️ レースが認識できませんでした');
+        return;
+      }
+      // 既存と重複を避ける簡易チェック（idで）
+      const existingIds = new Set(allRaces.map(r => r.id));
+      const newRaces = parsed.filter(r => !existingIds.has(r.id));
+      if (!newRaces.length) {
+        showToast('ℹ️ すべてのレースは既に登録済みです');
+        return;
+      }
+      allRaces.push(...newRaces);
+      persistRaces();
+      currentRaceIdx = allRaces.length - newRaces.length;
+      populateRaceSelector();
+      updateBatchStats();
+      renderCurrentRace();
+      refreshVerticalStockList();
+      showToast(`✅ ${newRaces.length}レースを一括登録しました`);
+    }
+
+    // 既存のimportボタンを一括対応に拡張（Ctrl/Shift押下時など、または常に全件も可）
+    const originalImportBtn = document.getElementById('importInstantPasteBtn');
+    originalImportBtn.addEventListener('click', (ev) => {
+      const text = document.getElementById('instantPasteInput').value;
+      if (ev.shiftKey || text.split('# 競輪レースデータ').length > 2) {
+        importAllRacesFromText(text);
+      } else if (latestInstantParsedRace) {
+        // 従来の単一追加
+        allRaces.push(latestInstantParsedRace);
+        persistRaces();
+        currentRaceIdx = allRaces.length - 1;
+        populateRaceSelector();
+        updateBatchStats();
+        renderCurrentRace();
+        refreshVerticalStockList();
+        showToast('➕ レースを追加しました');
+      }
+    });
 
     window.addEventListener('load', () => { renderBuilderRows(); populateRaceSelector(); updateBatchStats(); renderCurrentRace(); refreshVerticalStockList(); });
   </script>
