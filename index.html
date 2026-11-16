@@ -74,7 +74,7 @@
         <div class="flex items-center gap-2 text-xs font-mono-code text-cyan-400 tracking-widest uppercase">
           <span>ATLANTIS VELODROME ARCHIVE // V7.2</span>
           <span class="px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-400/30 text-emerald-300">BASELINE CALIBRATED</span>
-          <button id="appUpdateBadge" type="button" class="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-400/40 text-amber-200 tracking-normal normal-case" title="押すとこの更新を確認済みにします">更新版 v1.8 · 2026/11/16</button>
+          <button id="appUpdateBadge" type="button" class="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-400/40 text-amber-200 tracking-normal normal-case" title="押すとこの更新を確認済みにします">更新版 v1.9 · 2026/11/17</button>
         </div>
         <h1 class="font-ancient text-2xl sm:text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 via-amber-200 to-purple-300 mt-1">
           KEIRIN 5大奇抜解析ラボ
@@ -956,11 +956,14 @@
       let html = '';
       allRaces.slice(0, 50).forEach((r, i) => {
         const isSelected = i === currentRaceIdx;
-        html += `<div class="flex items-center gap-1.5"><div data-idx="${i}" class="stock-race-item flex-1 cursor-pointer flex justify-between px-2.5 py-2 rounded-lg border text-xs ${isSelected ? 'bg-cyan-500/20 border-cyan-400 text-white' : 'bg-slate-900 border-slate-800 text-slate-300'}"><span class="truncate">#${i+1} ${r.id}</span></div></div>`;
+        html += `<div class="flex items-center gap-1.5"><div data-idx="${i}" class="stock-race-item flex-1 cursor-pointer flex justify-between px-2.5 py-2 rounded-lg border text-xs ${isSelected ? 'bg-cyan-500/20 border-cyan-400 text-white' : 'bg-slate-900 border-slate-800 text-slate-300'}"><span class="truncate">#${i+1} ${r.id}</span></div><button type="button" data-del="${i}" class="stock-del shrink-0 px-2 py-2 rounded-lg border border-rose-400/40 bg-rose-500/15 text-[11px] text-rose-200">削除</button></div>`;
       });
       listEl.innerHTML = html;
       listEl.querySelectorAll('.stock-race-item').forEach(el => {
         el.addEventListener('click', () => { currentRaceIdx = parseInt(el.dataset.idx, 10); document.getElementById('raceSelector').value = currentRaceIdx; renderCurrentRace(); refreshVerticalStockList(); });
+      });
+      listEl.querySelectorAll('.stock-del').forEach(el => {
+        el.addEventListener('click', () => deleteRaceByIndex(parseInt(el.dataset.del, 10)));
       });
     }
 
@@ -1084,14 +1087,11 @@
       reader.readAsText(file, 'utf-8');
     });
 
-    // 全レース一括インポートボタン用（HTMLに後で追加するか、既存ボタンを拡張）
-    function importAllRacesFromText(text) {
-      const parsed = parseMarkdownRaces(text.startsWith('#') ? text : `# 競輪レースデータ：即席\n${text}`);
+    function importParsedRaces(parsed) {
       if (!parsed.length) {
         showToast('⚠️ レースが認識できませんでした');
         return;
       }
-      // 既存と重複を避ける簡易チェック（idで）
       const existingIds = new Set(allRaces.map(r => r.id));
       const newRaces = parsed.filter(r => !existingIds.has(r.id));
       if (!newRaces.length) {
@@ -1108,7 +1108,58 @@
       showToast(`✅ ${newRaces.length}レースを一括登録しました`);
     }
 
-    // 既存のimportボタンを一括対応に拡張（Ctrl/Shift押下時など、または常に全件も可）
+    function racesFromCsv(text) {
+      if (typeof Papa === 'undefined') return [];
+      const parsed = Papa.parse(text.replace(/^\uFEFF/, ''), { header: true, skipEmptyLines: true });
+      return (parsed.data || []).map(row => {
+        const groups = String(row.lines || '').split('/').map(g => g.split('-').filter(Boolean)).filter(g => g.length);
+        const cars = [...new Set(groups.flat().map(n => parseInt(n, 10)))].filter(n => n >= 1 && n <= 9);
+        const entries = [];
+        for (let car = 1; car <= 9; car++) {
+          const mark = row['mark_' + car];
+          if (!cars.includes(car) && !mark) continue;
+          if (cars.length && !cars.includes(car)) continue;
+          entries.push({ car, name: String(row['name_' + car] || car), rawMark: (mark || '無').trim() });
+        }
+        if (entries.length < 5) return null;
+        return {
+          id: String(row.race_id || row.id || 'CSV').slice(0, 48),
+          rawFormation: groups.map(g => `[${g.join(' ')}]`).join(' '),
+          lines: groups,
+          resultOrder: row.result || '',
+          payout: row.tri_yen ? Number(row.tri_yen) : null,
+          entries
+        };
+      }).filter(Boolean);
+    }
+
+    function importAllRacesFromText(text) {
+      const parsed = parseMarkdownRaces(text.startsWith('#') ? text : `# 競輪レースデータ：即席\n${text}`);
+      importParsedRaces(parsed);
+    }
+
+    document.getElementById('dataFileInput').addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (!file) return;
+      const status = document.getElementById('dataFileReadStatus');
+      status.textContent = `読込中: ${file.name}`;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const text = String(ev.target.result || '');
+        status.textContent = `読込済: ${file.name}（${text.length}文字）`;
+        const isCsv = /\.csv$/i.test(file.name) || /^race_id,/.test(text.slice(0, 80));
+        if (isCsv) importParsedRaces(racesFromCsv(text));
+        else importAllRacesFromText(text);
+      };
+      reader.onerror = () => {
+        status.textContent = '読込失敗';
+        showToast('⚠️ ファイルを読めませんでした');
+      };
+      reader.readAsText(file, 'utf-8');
+    });
+    document.getElementById('deleteSelectedRaceBtn').addEventListener('click', () => deleteRaceByIndex(currentRaceIdx));
+
     const originalImportBtn = document.getElementById('importInstantPasteBtn');
     originalImportBtn.addEventListener('click', (ev) => {
       const text = document.getElementById('instantPasteInput').value;
